@@ -720,6 +720,82 @@ bool load_jpg(const std::string &filename, ImageType *im) {
 #endif
 }
 
+template<typename ImageType, Internal::CheckFunc check = Internal::CheckReturn>
+bool load_txt(const std::string &filename, ImageType *im) {
+
+    const int MAX_WIDTH = 8192;
+    const int MAX_HEIGHT = 8192;
+    const int MAX_LINE_LENGTH = 7*MAX_WIDTH;  // 16 bit signed integers plus potential negative sign and space between.
+    /* open file and test for it being a ppm */
+    Internal::FileOpener f(filename.c_str(), "r");
+    if (!check(f.f != nullptr, "File %s could not be opened for reading\n", filename.c_str())) return false;
+
+    int x=0, y=0;
+    int width=0, height=0;
+    int *data = new int[MAX_HEIGHT*MAX_WIDTH];
+    char *line = new char[MAX_LINE_LENGTH+1];
+    char *value;
+
+    int i=0, ret;
+    while(fgets(line, MAX_LINE_LENGTH, f.f)!=NULL) {
+        value = strtok(line, " \t");
+        while(value!=NULL) {
+            ret = sscanf(value, "%d", &(data[i]));
+            if (ret<1) break;
+            value = strtok(NULL, " \t");
+            x++;
+            i++;
+            if (x==MAX_WIDTH) break;
+        }
+        width = x;
+        x = 0;
+        y++;
+        if (y==MAX_HEIGHT) break;
+    }
+
+    height = y;
+
+    *im = ImageType(width, height);
+
+    // convert the data to ImageType::ElemType
+    typename ImageType::ElemType *im_data = (typename ImageType::ElemType*) im->data();
+    for (int y = 0; y < im->height(); y++) {
+        int *row = &(data[y*width]);
+        for (int x = 0; x < im->width(); x++) {
+            //im_data[(y)*width+x] = (int16_t)*row++;
+            im_data[(y)*width+x] = *row++;
+        }
+    }
+    (*im)(0,0,0) = (*im)(0,0,0);      /* Mark dirty inside read/write functions. */
+
+    return true;
+}
+
+template<typename ImageType, Internal::CheckFunc check = Internal::CheckReturn>
+bool save_txt(ImageType &im, const std::string &filename) {
+
+    im.copy_to_host();
+
+    // open file
+    Internal::FileOpener f(filename.c_str(), "w");
+    if (!check(f.f != nullptr, "[write_txt_file] File %s could not be opened for writing\n", filename.c_str())) return false;
+
+    // im.copyToHost(); // in case the image is on the gpu
+
+    typename ImageType::ElemType *srcPtr = (typename ImageType::ElemType*)im.data();
+
+    for (int y = 0; y < im.height(); y++) {
+        for (int x = 0; x < im.width(); x++) {
+            for (int c = 0; c < im.channels(); c++) {
+                fprintf(f.f, "%d ", *srcPtr);
+                srcPtr++;
+            }
+        }
+        fprintf(f.f, "\n");
+    }
+
+    return true;
+}
 
 // Returns false upon failure.
 template<typename ImageType, Internal::CheckFunc check = Internal::CheckReturn>
@@ -733,10 +809,13 @@ bool load(const std::string &filename, ImageType *im) {
         return load_pgm<ImageType, check>(filename, im);
     } else if (Internal::ends_with_ignore_case(filename, ".ppm")) {
         return load_ppm<ImageType, check>(filename, im);
+    } else if (Internal::ends_with_ignore_case(filename, ".txt")) {
+        return load_txt<ImageType, check>(filename, im);
     } else {
-        return check(false, "[load] unsupported file extension (png|jpg|pgm|ppm supported)");
+        return check(false, "[load] unsupported file extension (png|jpg|pgm|ppm|txt supported)");
     }
 }
+
 // Returns false upon failure.
 template<typename ImageType, Internal::CheckFunc check = Internal::CheckReturn>
 bool save(ImageType &im, const std::string &filename) {
@@ -749,8 +828,10 @@ bool save(ImageType &im, const std::string &filename) {
         return save_pgm<ImageType, check>(im, filename);
     } else if (Internal::ends_with_ignore_case(filename, ".ppm")) {
         return save_ppm<ImageType, check>(im, filename);
+    } else if (Internal::ends_with_ignore_case(filename, ".txt")) {
+        return save_txt<ImageType, check>(im, filename);
     } else {
-        return check(false, "[save] unsupported file extension (png|jpg|pgm|ppm supported)");
+        return check(false, "[save] unsupported file extension (png|jpg|pgm|ppm|txt supported)");
     }
 }
 
