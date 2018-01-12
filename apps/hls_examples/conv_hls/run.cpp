@@ -19,8 +19,16 @@ const unsigned char gaussian2d[5][5] = {
     {1,     3,     6,     3,     1}
 };
 
+#ifdef ZYNQ
+int halide_zynq_init();
+#endif
 
 int main(int argc, char **argv) {
+
+#ifdef ZYNQ
+    halide_zynq_init();
+#endif
+
     BufferMinimal<uint8_t> in(800, 800, 3);
     BufferMinimal<uint8_t> weight(5, 5);
 

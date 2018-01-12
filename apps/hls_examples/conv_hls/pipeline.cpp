@@ -94,6 +94,11 @@ public:
         output.compile_to_lowered_stmt("pipeline_native.ir.html", args, HTML);
         output.compile_to_header("pipeline_native.h", args, "pipeline_native");
         output.compile_to_object("pipeline_native.o", args, "pipeline_native");
+
+        std::vector<Target::Feature> features({Target::Zynq});
+        Target target(Target::Linux, Target::ARM, 32, features);
+        output.compile_to_header("pipeline_arm.h", args, "pipeline_native", target);
+        output.compile_to_object("pipeline_arm.o", args, "pipeline_native", target);
     }
 
     void compile_gpu() {
@@ -133,6 +138,12 @@ public:
         output.compile_to_lowered_stmt("pipeline_hls.ir.html", args, HTML, hls_target);
         output.compile_to_hls("pipeline_hls.cpp", args, "pipeline_hls", hls_target);
         output.compile_to_header("pipeline_hls.h", args, "pipeline_hls", hls_target);
+
+        std::vector<Target::Feature> features({Target::Zynq});
+        Target target(Target::Linux, Target::ARM, 32, features);
+        target.set_feature(Target::CPlusPlusMangling);
+        output.compile_to_zynq_c("pipeline_zynq.cpp", args, "pipeline_hls", target);
+        output.compile_to_header("pipeline_zynq.h", args, "pipeline_hls", target);
     }
 };
 
