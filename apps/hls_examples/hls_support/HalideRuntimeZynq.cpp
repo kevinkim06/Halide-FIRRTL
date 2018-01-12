@@ -12,27 +12,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
-#ifndef HALIDE_ATTRIBUTE_ALIGN
-  #ifdef _MSC_VER
-    #define HALIDE_ATTRIBUTE_ALIGN(x) __declspec(align(x))
-  #else
-    #define HALIDE_ATTRIBUTE_ALIGN(x) __attribute__((aligned(x)))
-  #endif
-#endif
-#ifndef BUFFER_T_DEFINED
-#define BUFFER_T_DEFINED
-typedef struct buffer_t {
-    uint64_t dev;
-    uint8_t* host;
-    int32_t extent[4];
-    int32_t stride[4];
-    int32_t min[4];
-    int32_t elem_size;
-    HALIDE_ATTRIBUTE_ALIGN(1) bool host_dirty;
-    HALIDE_ATTRIBUTE_ALIGN(1) bool dev_dirty;
-    HALIDE_ATTRIBUTE_ALIGN(1) uint8_t _padding[10 - sizeof(void *)];
-} buffer_t;
-#endif
+#include "HalideRuntime.h"
 
 #ifndef CMA_BUFFER_T_DEFINED
 #define CMA_BUFFER_T_DEFINED
@@ -52,21 +32,19 @@ typedef struct cma_buffer_t {
 
 #ifndef _IOCTL_CMDS_H_
 #define _IOCTL_CMDS_H_
+
 // TODO: switch these out for "proper" mostly-system-unique ioctl numbers
 #define GET_BUFFER 1000 // Get an unused buffer
 #define GRAB_IMAGE 1001 // Acquire image from camera
 #define FREE_IMAGE 1002 // Release buffer
 #define PROCESS_IMAGE 1003 // Push to stencil path
 #define PEND_PROCESSED 1004 // Retreive from stencil path
-#endif
 
-#ifdef __cplusplus
-extern "C" {
 #endif
 
 // file descriptors of devices
-static int fd_hwacc = 0;
-static int fd_cma = 0;
+int fd_hwacc = 0;
+int fd_cma = 0;
 
 int halide_zynq_init() {
     if (fd_cma || fd_hwacc) {
@@ -101,7 +79,7 @@ static int cma_free_buffer(cma_buffer_t* ptr) {
     return ioctl(fd_cma, FREE_IMAGE, (long unsigned int)ptr);
 }
 
-int halide_zynq_cma_alloc(struct buffer_t *buf) {
+int halide_zynq_cma_alloc(struct halide_buffer_t *buf) {
     if (fd_cma == 0) {
         printf("Zynq runtime is uninitialized.\n");
         return -1;
@@ -117,25 +95,19 @@ int halide_zynq_cma_alloc(struct buffer_t *buf) {
 
     // Currently kernel buffer only supports 2-D data layout,
     // so we fold lower dimensions into the 'depth' field.
-    size_t nDims = 4;
-    while (nDims > 0) {
-        if (buf->extent[nDims - 1] != 0) {
-            break;
-        }
-        --nDims;
-    }
+    size_t nDims = buf->dimensions;
     if (nDims < 2) {
         free(cbuf);
         printf("buffer_t has less than 2 dimension, not supported in CMA driver.");
         return -3;
     }
-    cbuf->depth = buf->elem_size;
+    cbuf->depth = buf->type.bytes();
     if (nDims > 2) {
         for (size_t i = 0; i < nDims - 2; i++)
-            cbuf->depth *= buf->extent[i];
+            cbuf->depth *= buf->dim[i].extent;
     }
-    cbuf->width = buf->extent[nDims-2];
-    cbuf->height = buf->extent[nDims-1];
+    cbuf->width = buf->dim[nDims-2].extent;
+    cbuf->height = buf->dim[nDims-1].extent;
     // TODO check stride of dimension are the same as width
     cbuf->stride = cbuf->width;
 
@@ -146,7 +118,7 @@ int halide_zynq_cma_alloc(struct buffer_t *buf) {
         return -2;
     }
 
-    buf->dev = (uint64_t) cbuf;
+    buf->device = (uint64_t) cbuf;
     buf->host = (uint8_t*) mmap(NULL, cbuf->stride * cbuf->height * cbuf->depth,
                                 PROT_WRITE, MAP_SHARED, fd_cma, cbuf->mmap_offset);
 
@@ -158,21 +130,25 @@ int halide_zynq_cma_alloc(struct buffer_t *buf) {
     return 0;
 }
 
-int halide_zynq_cma_free(struct buffer_t *buf) {
+int halide_zynq_cma_free(struct halide_buffer_t *buf) {
     if (fd_cma == 0) {
         printf("Zynq runtime is uninitialized.\n");
         return -1;
     }
 
-    cma_buffer_t *cbuf = (cma_buffer_t *)buf->dev;
+    cma_buffer_t *cbuf = (cma_buffer_t *)buf->device;
     munmap((void*)buf->host, cbuf->stride * cbuf->height * cbuf->depth);
     cma_free_buffer(cbuf);
     free(cbuf);
+    buf->device = 0;
     return 0;
 }
 
-int halide_zynq_subimage(const struct buffer_t* image, struct cma_buffer_t* subimage, void *address_of_subimage_origin, int width, int height) {
-    *subimage = *((cma_buffer_t *)image->dev); // copy depth, stride, data, etc.
+int halide_zynq_subimage(const struct halide_buffer_t* image, struct cma_buffer_t* subimage, void *address_of_subimage_origin, int width, int height) {
+    //*subimage = *((cma_buffer_t *)image->device); // copy depth, stride, data, etc.
+    subimage->depth = image->dim[0].extent;
+    subimage->stride = image->dim[1].stride;
+    subimage->kern_addr = image->host;
     subimage->width = width;
     subimage->height = height;
     size_t offset = (uint8_t *)address_of_subimage_origin - image->host;
@@ -199,7 +175,3 @@ int halide_zynq_hwacc_sync(int task_id){
     return res;
 }
 
-
-#ifdef __cplusplus
-} // End extern "C"
-#endif
