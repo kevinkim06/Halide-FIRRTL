@@ -30,6 +30,7 @@ protected:
 
     using CodeGen_C::visit;
 
+    virtual std::string print_name(const std::string &name);
     void visit(const Realize *);
     void visit(const ProducerConsumer *op);
     void visit(const Call *);
