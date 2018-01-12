@@ -142,7 +142,7 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::add_kernel(Stmt stmt,
     // Emit the function prototype
     stream << "void " << name << "(\n";
     for (size_t i = 0; i < args.size(); i++) {
-        string arg_name = "arg_" + std::to_string(i);
+        string arg_name = print_name(args[i].name);
         if (args[i].is_stencil) {
             CodeGen_HLS_Base::Stencil_Type stype = args[i].stencil_type;
             internal_assert(args[i].stencil_type.type == Stencil_Type::StencilContainerType::AxiStream ||
@@ -173,7 +173,7 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::add_kernel(Stmt stmt,
                << "#pragma HLS INTERFACE s_axilite port=return"
                << " bundle=config\n";
         for (size_t i = 0; i < args.size(); i++) {
-            string arg_name = "arg_" + std::to_string(i);
+            string arg_name = print_name(args[i].name);
             if (args[i].is_stencil) {
                 if (ends_with(args[i].name, ".stream")) {
                     // stream arguments use AXI-stream interface
@@ -191,23 +191,6 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::add_kernel(Stmt stmt,
                 // scalar arguments use AXI-lite interface
                 stream << "#pragma HLS INTERFACE s_axilite "
                        << "port=" << arg_name << " bundle=config\n";
-            }
-        }
-        stream << "\n";
-
-        // create alias (references) of the arguments using the names in the IR
-        do_indent();
-        stream << "// alias the arguments\n";
-        for (size_t i = 0; i < args.size(); i++) {
-            string arg_name = "arg_" + std::to_string(i);
-            do_indent();
-            if (args[i].is_stencil) {
-                CodeGen_HLS_Base::Stencil_Type stype = args[i].stencil_type;
-                stream << print_stencil_type(args[i].stencil_type) << " &"
-                       << print_name(args[i].name) << " = " << arg_name << ";\n";
-            } else {
-                stream << print_type(args[i].scalar_type) << " &"
-                       << print_name(args[i].name) << " = " << arg_name << ";\n";
             }
         }
         stream << "\n";
