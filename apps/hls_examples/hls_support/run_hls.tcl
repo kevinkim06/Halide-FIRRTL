@@ -28,7 +28,7 @@ csynth_design
 #cosim_design -O -ldflags ${LD_FLAGS} -argv $env(RUN_ARGS)
 
 # export the RTL design as a Xilix IP Catalog
-#export_design -format ip_catalog
+export_design -format ip_catalog
 #export_design -evaluate verilog -format ip_catalog
 
 exit
