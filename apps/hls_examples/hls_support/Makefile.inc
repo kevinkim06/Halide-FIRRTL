@@ -14,3 +14,13 @@ HLS_IFLAG += -I ../hls_support/xilinx_hls_lib_2015_4
 
 HLS_CXXFLAGS = $(HLS_IFLAG) -DC_TEST
 HLS_CXXFLAGS += -Wno-unknown-pragmas -Wno-unused-label -Wno-uninitialized -Wno-literal-suffix
+
+#### Zynq
+# local libpng for ARM.
+ZYNQ_CXXFLAGS = $(HLS_CXXFLAGS) -I ../hls_support/libs/png/include -L ../hls_support/libs/png/lib -L ../hls_support/libs/zlib/lib -DZYNQ -DHALIDE_NO_JPEG
+# png only for now
+# Use -static just for convenience
+ZYNQ_LDFLAGS = -lpng $(LDFLAGS) -static
+# hf is required.
+CROSS_COMPILE ?= arm-linux-gnueabihf-
+
