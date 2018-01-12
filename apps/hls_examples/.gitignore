@@ -4,6 +4,7 @@ hls_target.cpp
 hls_target.h
 pipeline_native.h
 pipeline_cuda.h
+pipeline_zynq.cpp
 pipeline_zynq.c
 pipeline_zynq.h
 pipeline
