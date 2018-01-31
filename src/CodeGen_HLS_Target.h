@@ -58,6 +58,7 @@ protected:
 
         void visit(const For *op);
         void visit(const Allocate *op);
+        void visit(const Call *op);
     };
 
     /** A name for the HLS target */
