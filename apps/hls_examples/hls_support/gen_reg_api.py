@@ -7,6 +7,7 @@ import xml.etree.ElementTree
 import sys,os,re
 from IPython import embed
 from optparse import OptionParser
+import string
 
 
 if __name__ == "__main__":
@@ -71,6 +72,7 @@ extern int fd_hwacc;
     for reg in root.findall(xd+"arg"):
         name   = reg.get(xd+"name")
         orgname= reg.get(xd+"originalName")
+        orgname= string.replace(orgname, "arg_", "")
         offset = reg.get(xd+"offset")
         size   = reg.get(xd+"arraySize")
         datawidth  = reg.get(xd+"dataWidth")
