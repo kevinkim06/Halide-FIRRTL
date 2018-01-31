@@ -272,6 +272,9 @@ SOURCE_FILES = \
   Closure.cpp \
   CodeGen_ARM.cpp \
   CodeGen_C.cpp \
+  CodeGen_FIRRTL_Base.cpp \
+  CodeGen_FIRRTL_Target.cpp \
+  CodeGen_FIRRTL_Testbench.cpp \
   CodeGen_GPU_Dev.cpp \
   CodeGen_GPU_Host.cpp \
   CodeGen_Hexagon.cpp \
@@ -291,6 +294,7 @@ SOURCE_FILES = \
   CodeGen_X86.cpp \
   CodeGen_Zynq_C.cpp \
   CodeGen_Zynq_LLVM.cpp \
+  Component.cpp \
   CPlusPlusMangle.cpp \
   CSE.cpp \
   CanonicalizeGPUVars.cpp \
@@ -413,6 +417,9 @@ HEADER_FILES = \
   Closure.h \
   CodeGen_ARM.h \
   CodeGen_C.h \
+  CodeGen_FIRRTL_Base.h \
+  CodeGen_FIRRTL_Target.h \
+  CodeGen_FIRRTL_Testbench.h \
   CodeGen_GPU_Dev.h \
   CodeGen_GPU_Host.h \
   CodeGen_LLVM.h \
@@ -425,6 +432,7 @@ HEADER_FILES = \
   CodeGen_PowerPC.h \
   CodeGen_PTX_Dev.h \
   CodeGen_X86.h \
+  Component.h \
   ConciseCasts.h \
   CPlusPlusMangle.h \
   CSE.h \

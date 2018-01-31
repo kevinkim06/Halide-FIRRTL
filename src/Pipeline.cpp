@@ -216,6 +216,15 @@ void Pipeline::compile_to_hls(const string &filename,
     m.compile(Outputs().c_source(output_name(filename, m, ".cpp")));
 }
 
+void Pipeline::compile_to_firrtl(const string &filename,
+                                 const vector<Argument> &args,
+                                 const string &fn_name,
+                                 const Target &target) {
+    Module m = compile_to_module(args, fn_name, target);
+    m.compile(Outputs().firrtl_source(output_name(filename, m, ".fir")));
+}
+
+
 void Pipeline::compile_to_zynq_c(const string &filename,
                                  const vector<Argument> &args,
                                  const string &fn_name,

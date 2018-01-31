@@ -5,6 +5,7 @@
 #include <future>
 
 #include "CodeGen_C.h"
+#include "CodeGen_FIRRTL_Testbench.h"
 #include "CodeGen_HLS_Testbench.h"
 #include "CodeGen_Internal.h"
 #include "CodeGen_Zynq_C.h"
@@ -388,6 +389,17 @@ void Module::compile(const Outputs &output_files) const {
         cg->compile(*this);
         delete cg;
         //----- HLS Modification Ends -------//
+    }
+    if (!output_files.firrtl_source_name.empty()) {
+        debug(1) << "Module.compile(): firrtl_source_name " << output_files.firrtl_source_name << "\n";
+        std::ofstream file(output_files.firrtl_source_name);
+        // TODO: Testbench generation is still C++ for now.
+        CodeGen_C::OutputKind output_kind =
+            target().has_feature(Target::CPlusPlusMangling)
+                ? CodeGen_C::CPlusPlusImplementation
+                : CodeGen_C::CImplementation;
+        CodeGen_FIRRTL_Testbench cg(file, target(), output_kind);
+        cg.compile(*this);
     }
     if (!output_files.stmt_name.empty()) {
         debug(1) << "Module.compile(): stmt_name " << output_files.stmt_name << "\n";
