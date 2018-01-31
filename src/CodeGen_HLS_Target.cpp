@@ -259,17 +259,6 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::visit(const For *op) {
     close_scope("for " + print_name(op->name));
 }
 
-void CodeGen_HLS_Target::CodeGen_HLS_C::visit(const Call *op) {
-    if (op->is_intrinsic(Call::reinterpret)) {
-        ostringstream rhs;
-        rhs << "(" << print_type(op->type) << ")";
-        rhs << "(" << print_expr(op->args[0]) << ")";
-        print_assignment(op->type, rhs.str());
-    } else {
-        CodeGen_HLS_Base::visit(op);
-    }
-}
-
 class RenameAllocation : public IRMutator {
     const string &orig_name;
     const string &new_name;
