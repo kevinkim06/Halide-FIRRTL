@@ -13,7 +13,7 @@ HLS_IFLAG += -I ../hls_support
 HLS_IFLAG += -I ../hls_support/xilinx_hls_lib_2015_4
 
 HLS_CXXFLAGS = $(HLS_IFLAG) -DC_TEST
-HLS_CXXFLAGS += -Wno-unknown-pragmas -Wno-unused-label -Wno-uninitialized -Wno-literal-suffix
+HLS_CXXFLAGS += -Wno-unknown-pragmas -Wno-unused-label -Wno-uninitialized -Wno-literal-suffix -Wno-error=unused-variable -Wno-unused-variable -Wno-error=unused-but-set-variable -Wno-unused-but-set-variable
 
 #### Zynq
 # local libpng for ARM.
