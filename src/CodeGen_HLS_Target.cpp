@@ -142,15 +142,14 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::add_kernel(Stmt stmt,
     // Emit the function prototype
     stream << "void " << name << "(\n";
     for (size_t i = 0; i < args.size(); i++) {
-        string arg_name = print_name(args[i].name);
+        string arg_name = "arg_" + print_name(args[i].name);
         if (args[i].is_stencil) {
             CodeGen_HLS_Base::Stencil_Type stype = args[i].stencil_type;
             internal_assert(args[i].stencil_type.type == Stencil_Type::StencilContainerType::AxiStream ||
                             args[i].stencil_type.type == Stencil_Type::StencilContainerType::Stencil);
             stream << print_stencil_type(args[i].stencil_type) << " ";
-            if (args[i].stencil_type.type == Stencil_Type::StencilContainerType::AxiStream) {
-                stream << "&";  // hls_stream needs to be passed by reference
-            }
+            stream << "&";  // hls_stream needs to be passed by reference
+                            // tap stencil needs to be passed by reference to prevent segfault with huge array.
             stream << arg_name;
             allocations.push(args[i].name, {args[i].stencil_type.elemType});
             stencils.push(args[i].name, args[i].stencil_type);
@@ -173,7 +172,7 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::add_kernel(Stmt stmt,
                << "#pragma HLS INTERFACE s_axilite port=return"
                << " bundle=config\n";
         for (size_t i = 0; i < args.size(); i++) {
-            string arg_name = print_name(args[i].name);
+            string arg_name = "arg_" + print_name(args[i].name);
             if (args[i].is_stencil) {
                 if (ends_with(args[i].name, ".stream")) {
                     // stream arguments use AXI-stream interface
@@ -191,6 +190,23 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::add_kernel(Stmt stmt,
                 // scalar arguments use AXI-lite interface
                 stream << "#pragma HLS INTERFACE s_axilite "
                        << "port=" << arg_name << " bundle=config\n";
+            }
+        }
+        stream << "\n";
+
+        // create alias (references) of the arguments using the names in the IR
+        do_indent();
+        stream << "// alias the arguments\n";
+        for (size_t i = 0; i < args.size(); i++) {
+            string arg_name = "arg_" + print_name(args[i].name);
+            do_indent();
+            if (args[i].is_stencil) {
+                CodeGen_HLS_Base::Stencil_Type stype = args[i].stencil_type;
+                stream << print_stencil_type(args[i].stencil_type) << " &"
+                       << print_name(args[i].name) << " = " << arg_name << ";\n";
+            } else {
+                stream << print_type(args[i].scalar_type) << " &"
+                       << print_name(args[i].name) << " = " << arg_name << ";\n";
             }
         }
         stream << "\n";
@@ -241,6 +257,17 @@ void CodeGen_HLS_Target::CodeGen_HLS_C::visit(const For *op) {
     }
     op->body.accept(this);
     close_scope("for " + print_name(op->name));
+}
+
+void CodeGen_HLS_Target::CodeGen_HLS_C::visit(const Call *op) {
+    if (op->is_intrinsic(Call::reinterpret)) {
+        ostringstream rhs;
+        rhs << "(" << print_type(op->type) << ")";
+        rhs << "(" << print_expr(op->args[0]) << ")";
+        print_assignment(op->type, rhs.str());
+    } else {
+        CodeGen_HLS_Base::visit(op);
+    }
 }
 
 class RenameAllocation : public IRMutator {
