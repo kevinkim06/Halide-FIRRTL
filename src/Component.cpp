@@ -135,5 +135,37 @@ void Component::addReg(string p, FIRRTL_Type s)
     }
 }
 
+void ForBlock::open_scope()
+{
+    indent += 2;
+}
+
+void ForBlock::close_scope(const std::string &comment)
+{
+    indent -= 2;
+}
+
+void ForBlock::print(string s) {
+    for (int i = 0; i < indent; i++) oss_body << ' ';
+    oss_body << s;
+}
+
+vector<string> ForBlock::print_body() {
+    string str = oss_body.str();
+    vector<string> res;
+
+    while(str.size()) {
+        size_t found = str.find("\n");
+        if (found!=string::npos) {
+            res.push_back(str.substr(0,found));
+            str = str.substr(found+1);
+        } else {
+            res.push_back(str);
+            str = "";
+        }
+    }
+    return res;
+}
+
 }
 }

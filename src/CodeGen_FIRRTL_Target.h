@@ -71,10 +71,8 @@ protected:
         void print_linebuffer2D(std::string name, int L[4], Type, int inEl[4], int outEl[4]);
         void print_linebuffer3D(std::string name, int L[4], Type, int inEl[4], int outEl[4]);
         void print_dispatch(Dispatch*);
-        void print_forcontrol(ForControl*);
+        void print_forblock(ForBlock*);
         void print_slaveif(SlaveIf*);
-        void print_computestage(ComputeStage*);
-        void print_wrstream(WrStream*);
         void generate_firrtl_fifo(int, int);
 
         // Converting FIRRTL_Argument to FIRRTL_Type
@@ -136,10 +134,7 @@ protected:
 
         // CodeGen for For statements
         int pipeline_depth;
-        ComputeStage *current_cs;
-        ForControl *current_fc;
         ForBlock *current_fb;
-        WrStream *current_ws;
 
         using IRPrinter::visit;
 
