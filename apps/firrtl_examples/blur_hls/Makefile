@@ -8,7 +8,7 @@ include ../hls_support/Makefile.inc
 HLS_LOG = vivado_hls.log
 
 #### FIRRTL
-FIRRTL_CMD = firrtl
+FIRRTL_CMD = ${FIRRTL_PATH}/utils/bin/firrtl
 
 .PHONY: all run_hls
 all: out.png
