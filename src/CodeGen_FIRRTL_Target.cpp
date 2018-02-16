@@ -279,20 +279,22 @@ string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment(Type t, const std
     // FIXME: better way? // signed/unsigned...
     FIRRTL_Type wire_type = {FIRRTL_Type::StencilContainerType::Scalar,t,Region(),0,{}};
 
-    if (cached == cache.end()) {
-        debug(3) << "CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment cachemiss\n";
-        id = unique_name('_');
-        if (current_cs!=nullptr) {
-            current_cs->addWire(id, wire_type);
-            current_cs->addConnect(id, rhs);
-        } else {
+    id = unique_name('_');
+
+    if (current_fb!=nullptr) { // Inside ForBlock, print to ForBlock oss_body directly.
+        //current_fb->addWire(id, wire_type);
+        //current_fb->addConnect(id, rhs);
+        current_fb->print("node " + id + " = " + rhs + "\n");
+    } else {
+        if (cached == cache.end()) {
+            debug(3) << "CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment cachemiss\n";
             top->addWire(id, wire_type);
             top->addConnect(id, rhs);
+            cache[rhs] = id;
+        } else {
+            debug(3) << "CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment cachehit\n";
+            id = cached->second;
         }
-        cache[rhs] = id;
-    } else {
-        debug(3) << "CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment cachehit\n";
-        id = cached->second;
     }
     return id;
 }
@@ -450,10 +452,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::add_kernel(Stmt stmt,
     }
 
     // initialize
-    current_fc = nullptr;
     current_fb = nullptr;
-    current_cs = nullptr;
-    current_ws = nullptr;
 
     // Visit body to collect components.
     print(stmt);
@@ -497,25 +496,9 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::add_kernel(Stmt stmt,
     for(auto &c : top->getComponents(ComponentType::Forblock)) {
         do_indent();
         stream << "; ForBlock instance " << c->getInstanceName() << "\n";
-        print_module(c);
-    }
-    for(auto &c : top->getComponents(ComponentType::Forcontrol)) {
-        do_indent();
-        stream << "; ForControl instance " << c->getInstanceName() << "\n";
-        print_forcontrol(static_cast<ForControl*>(c));
-    }
-    for(auto &c : top->getComponents(ComponentType::Computestage)) {
-        do_indent();
-        stream << "; ComputeStage instance " << c->getInstanceName() << "\n";
-        print_computestage(static_cast<ComputeStage*>(c));
-    }
-    for(auto &c : top->getComponents(ComponentType::Wrstream)) {
-        do_indent();
-        stream << "; WrStream instance " << c->getInstanceName() << "\n";
-        print_wrstream(static_cast<WrStream*>(c));
+        print_forblock(static_cast<ForBlock*>(c));
     }
 
-    close_scope("");
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_module(Component *c)
@@ -574,8 +557,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_module(Component *c)
         do_indent();
         stream << p << " <= " << cn[p] << "\n";
     }
+    close_scope(" end of " + c->getModuleName());
     stream << "\n";
-    close_scope("");
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
@@ -780,18 +763,18 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
         if (r.is_stencil) {
             if (r.extents.size()==1) {
                 do_indent();
-                stream << "w_" << r.name << "_rd_idx0" << " <= asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\")))\n";
+                stream << "w_" << r.name << "_rd_idx0" << " <= shr(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\"))), 2)\n";
                 do_indent();
-                stream << "w_" << r.name << "_wr_idx0" << " <= asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << p.first << "\")))\n";
+                stream << "w_" << r.name << "_wr_idx0" << " <= shr(asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << p.first << "\"))), 2)\n";
                 stream << std::dec;
             } else {
-                int stride = r.extents[0];
+                int stride = r.extents[0] * 4;
                 do_indent();
-                stream << "w_" << r.name << "_rd_idx0" << " <= rem(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
-                stream << "UInt(\"h" << std::hex << stride << "\"))\n";
+                stream << "w_" << r.name << "_rd_idx0" << " <= shr(rem(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
+                stream << "UInt(\"h" << std::hex << stride << "\")), 2)\n";
                 do_indent();
-                stream << "w_" << r.name << "_wr_idx0" << " <= rem(asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
-                stream << "UInt(\"h" << std::hex << stride << "\"))\n";
+                stream << "w_" << r.name << "_wr_idx0" << " <= shr(rem(asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
+                stream << "UInt(\"h" << std::hex << stride << "\")), 2)\n";
                 for(size_t i = 1 ; i < r.extents.size() ; i++) {
                     do_indent();
                     stream << "w_" << r.name << "_rd_idx" << i << " <= div(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
@@ -905,9 +888,9 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
         s.replace(0,2,""); // remove "r_"
         do_indent(); stream << s << " <= " << p.first << "\n";
     }
-    stream << "\n";
 
-    close_scope("");
+    close_scope(" end of " + c->getModuleName());
+    stream << "\n";
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
@@ -953,7 +936,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
     }
     stream << "\n";
     do_indent(); stream << ";  Image Size=";
-    for(const auto &s : in_stencil.store_extents) {
+    vector<int> store_extents = c->getStoreExtents();
+    for(const auto &s : store_extents) {
         stream << "[" << s << "]";
     }
     stream << "\n";
@@ -973,7 +957,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
     }
 
     // Body of IO
-    int store_extents_size = in_stencil.store_extents.size();
+    int store_extents_size = store_extents.size();
     for(int i = 0; i < store_extents_size; i++) {
         do_indent(); stream << "wire VAR_" << i << "_MIN : UInt<16>\n";
         do_indent(); stream << "wire VAR_" << i << "_MAX : UInt<16>\n";
@@ -984,7 +968,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
     stream << "\n";
     for(int i = 0; i < store_extents_size; i++) {
         do_indent(); stream << "VAR_" << i << "_MIN <= UInt<16>(0)\n";
-        do_indent(); stream << "VAR_" << i << "_MAX <= UInt<16>(" << (in_stencil.store_extents[i] - 1) << ")\n";
+        do_indent(); stream << "VAR_" << i << "_MAX <= UInt<16>(" << store_extents[i]-1 << ")\n";
     }
     stream << "\n";
 
@@ -995,6 +979,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
     do_indent(); stream << "reg  r_cs_fsm : UInt<2>, clock with : (reset => (reset, UInt<2>(0)))\n";
     do_indent(); stream << "wire w_ns_fsm : UInt<2>\n";
     do_indent(); stream << "wire w_done : UInt<1>\n";
+    do_indent(); stream << "reg  r_done : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
 
     for(int i = 0 ; i < store_extents_size; i++) {
         do_indent(); stream << "reg  r_counter_var_" << i << " : UInt<16>, clock with : (reset => (reset, UInt<16>(0)))\n";
@@ -1125,6 +1110,9 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
 
     do_indent(); stream << "when ready_valid :\n";
     do_indent(); stream << "  r_data_out <= data_in_i\n";
+    do_indent(); stream << "  r_done     <= w_done\n";
+    do_indent(); stream << "else :\n";
+    do_indent(); stream << "  r_done     <= UInt<1>(0)\n";
     stream << "\n";
 
     do_indent(); stream << "when ready_valid :\n";
@@ -1141,13 +1129,13 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
         do_indent(); stream << istr << ".ready <= ready_out_i\n";
         do_indent(); stream << ostr << ".TVALID <= r_valid_out\n";
         do_indent(); stream << ostr << ".TDATA <= r_data_out\n";
-        do_indent(); stream << ostr << ".TLAST <= w_done\n";
+        do_indent(); stream << ostr << ".TLAST <= r_done\n";
     }
 
     do_indent(); stream << "done_out <= eq(r_cs_fsm, ST_DONE)\n";
-    stream << "\n";
 
-    close_scope("");
+    close_scope(" end of " + c->getModuleName());
+    stream << "\n";
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
@@ -1238,7 +1226,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
     stream << "\n";
 
     do_indent(); stream << "when and(w_push, not(w_pop)) :\n";
-    do_indent(); stream << "  when eq(r_level, UInt<16>(" << depth-1 << ")) :\n";
+    do_indent(); stream << "  when eq(r_level, UInt<16>(" << depth << ")) :\n";
     do_indent(); stream << "    r_full <= UInt<1>(1)\n";
     do_indent(); stream << "  else :\n";
     do_indent(); stream << "    r_full <= UInt<1>(0)\n";
@@ -1267,9 +1255,9 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
     stream << "\n";
 
     do_indent(); stream << "data_in.ready <= not(r_full)\n";
-    stream << "\n";
 
-    close_scope("");
+    close_scope(" end of " + c->getModuleName());
+    stream << "\n";
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer(LineBuffer *c)
@@ -1410,8 +1398,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer(LineBuffer *c)
     }
     do_indent(); stream << out_stream << ".valid <= " << "LB_" << out_stream << "_" << nDim << "D.io.out.valid\n";
     do_indent(); stream << "LB_" << out_stream << "_" << nDim << "D.io.out.ready <= " << out_stream << ".ready\n";
+    close_scope(" end of " + c->getModuleName());
     stream << "\n";
-    close_scope("");
 
     if (nDim==1) { // TODO
         // TODO: assert inEl[1] == outEl[1] == 1
@@ -1574,8 +1562,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer1D(string name, int 
         do_indent(); stream << "io.in.ready <= io.out.ready\n";
     }
 
+    close_scope(" end of " + name + "_1D");
     stream << "\n";
-    close_scope("");
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer2D(string name, int L[4], Type t, int inEl[4], int outEl[4])
@@ -1758,8 +1746,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer2D(string name, int 
         do_indent(); stream << name << "_1D.io.out.ready <= io.out.ready\n";
     }
 
+    close_scope(" end of " + name + "_2D");
     stream << "\n";
-    close_scope("");
 
     if ((inEl[0]!=outEl[0]) || (inEl[1]!=outEl[1])) {
         inEl[1] = outEl[1];
@@ -1842,8 +1830,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer3D(string name, int 
         }
         do_indent(); stream << "io.out.valid <= " << name << "_2D.io.out.valid\n";
         do_indent(); stream << name << "_2D.io.out.ready <= io.out.ready\n";
+        close_scope(" end of " + name + "_3D");
         stream << "\n";
-        close_scope("");
 
 
         inEl[0] = inEl[0]*inEl[1];
@@ -1907,8 +1895,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer3D(string name, int 
         }
         do_indent(); stream << "io.out.valid <= " << name << "_2D.io.out.valid\n";
         do_indent(); stream << name << "_2D.io.out.ready <= io.out.ready\n";
+        close_scope(" end of " + name + "_3D");
         stream << "\n";
-        close_scope("");
 
 
         inEl[0] = inEl[0];
@@ -1928,6 +1916,171 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer3D(string name, int 
         do_indent(); stream << "; Not supported yet\n";
     }
 
+}
+
+void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forblock(ForBlock *c)
+{
+    do_indent();
+    stream << "module " << c->getModuleName() << " :\n";
+    open_scope();
+
+    // Print ports.
+    do_indent();
+    stream << "input clock : Clock\n";
+    do_indent();
+    stream << "input reset : UInt<1>\n";
+
+    for(auto &p : c->getInPorts()) {
+        do_indent();
+        stream << "input " << p.first << " : " << print_stencil_type(p.second) << "\n";
+    }
+    for(auto &p : c->getOutPorts()) {
+        do_indent();
+        stream << "output " << p.first << " : " << print_stencil_type(p.second) << "\n";
+    }
+    stream << "\n";
+
+    do_indent(); stream << "; Parameters:\n";
+    do_indent(); stream << ";  var=";
+    for(auto &p : c->getVars()) {
+        stream << p << " ";
+    }
+    stream << "\n";
+
+    do_indent(); stream << ";  min=";
+    for(auto &p : c->getMins()) {
+        stream << p << " ";
+    }
+    stream << "\n";
+
+    do_indent(); stream << ";  max=";
+    for(auto &p : c->getMaxs()) {
+        stream << p << " ";
+    }
+    stream << "\n";
+    stream << "\n";
+
+    // Body of ForBlock
+    string         out_stream;
+    for(auto &p : c->getOutputs()) { // only one output
+        out_stream  = p.first;
+        break;
+    }
+
+    vector<string> vars = c->getVars();
+    vector<int>    mins = c->getMins(); // always 0.
+    vector<int>    maxs = c->getMaxs();
+    for(unsigned i = 0 ; i < vars.size() ; i++) {
+        do_indent();
+        stream << "reg " << vars[i] << " : UInt<16>, clock with : (reset => (reset, UInt<16>(" << mins[i] << ")))\n";
+        // TODO Let's use 16-bit counter for all case for now.
+    }
+    for(auto &p : c->getRegs()) {
+        do_indent();
+        stream << "reg " << p.first << " : " << print_stencil_type(p.second) << ", clock\n";
+    }
+
+    // For now there are 2 stages in ForBlock pipeline.
+    do_indent();
+    stream << "reg pp1_valid : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
+    do_indent();
+    stream << "reg pp2_valid : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
+
+    do_indent(); stream << "reg started : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
+    do_indent(); stream << "reg flushing : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
+
+    do_indent(); stream << out_stream << ".value is invalid\n";
+    do_indent(); stream << out_stream << ".valid is invalid\n";
+
+    do_indent(); stream << "done_out is invalid\n";
+
+    for(auto &p : c->getInputs()) {
+        do_indent();
+        stream << p.first << ".ready <= UInt<1>(0)\n";
+    }
+
+    do_indent(); stream << out_stream << ".valid <= UInt<1>(0)\n";
+
+    do_indent(); stream << "done_out <= UInt<1>(0)\n";
+    do_indent(); stream << "when start_in :\n";
+    do_indent(); stream << "  started <= UInt<1>(1)\n";
+    do_indent(); stream << "  flushing <= UInt<1>(0)\n";
+    for(unsigned i = 0 ; i < vars.size() ; i++) {
+        do_indent();
+        stream << "  " << vars[i] << " <= UInt<16>(" << mins[i] << ")\n";
+    }
+    do_indent(); stream << "  skip\n";
+    do_indent(); stream << "else when done_out :\n";
+    do_indent(); stream << "  started <= UInt<1>(0)\n";
+    do_indent(); stream << "  skip\n";
+
+    do_indent(); stream << "when started :\n";
+    open_scope();
+
+    for(auto &p : c->getInputs()) {
+        do_indent();
+        stream << "when or(" << p.first << ".valid, flushing) :\n";
+        open_scope();
+    }
+
+    do_indent();
+    stream << "when " << out_stream << ".ready :\n";
+    open_scope();
+
+    for(auto &p : c->getInputs()) {
+        do_indent();
+        stream << p.first << ".ready <= UInt<1>(1)\n";
+    }
+
+    do_indent(); stream << "pp1_valid <= not(flushing)\n"; // passing valid to next stage of pipeline in ForBlock.
+
+    // printing out oss_body of the ForBlock. (read_stream, computing stage, write_stream)
+    for(auto &p : c->print_body()) {
+        do_indent(); stream << p << "\n";
+    }
+
+    // printing out scan var counters
+    for(int i = vars.size()-1 ; i >= 0 ; i--) { // reverse order
+        do_indent();
+        stream << "node " << vars[i] << "_is_max = eq(" << vars[i] << ", UInt<16>(" << maxs[i] << "))\n";
+        do_indent();
+        stream << "node " << vars[i] << "_inc_c  = add(" << vars[i] << ", UInt<1>(1))\n";
+        do_indent();
+        stream << "node " << vars[i] << "_inc  = tail(" << vars[i] << "_inc_c, 1)\n";
+        do_indent();
+        stream << vars[i] << " <=  " << vars[i] << "_inc\n";
+        do_indent();
+        stream << "when " << vars[i] << "_is_max :\n";
+        open_scope();
+        do_indent();
+        stream << vars[i] << " <= UInt<16>(" << mins[i] << ")\n";
+    }
+    do_indent();
+    stream << "flushing <= UInt<1>(1)\n";
+
+    for(unsigned i = 0 ; i < vars.size() ; i++) {
+        close_scope(vars[i]);
+    }
+
+    close_scope(out_stream + ".ready");
+
+    do_indent(); stream << "when flushing :\n";
+    open_scope();
+    do_indent(); stream << "when not(pp2_valid) :\n";
+    open_scope();
+    do_indent(); stream << "flushing <= UInt<1>(0)\n";
+    do_indent(); stream << "done_out <= UInt<1>(1)\n";
+    close_scope("");
+    close_scope("flushing");
+
+    for(auto &p : c->getInputs()) {
+        close_scope(p.first + ".valid");
+    }
+
+    close_scope("started");
+
+    close_scope(" end of " + c->getModuleName());
+    stream << "\n";
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_dispatch(Dispatch *c)
@@ -2020,681 +2173,111 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_dispatch(Dispatch *c)
     vector<int> stencil_sizes = c->getStencilSizes();
     vector<int> stencil_steps = c->getStencilSteps();
     vector<int> store_extents = c->getStoreExtents();
-    size_t num_of_dimensions = stencil_sizes.size();
+    int num_of_dimensions = stencil_sizes.size();
 
     vector<int> consumer_fifo_depths = c->getConsumerFifoDepths();
     vector<vector<int> > consumer_offsets = c->getConsumerOffsets();
     vector<vector<int> > consumer_extents = c->getConsumerExtents();
-    size_t num_of_consumers = consumer_fifo_depths.size();
+    int num_of_consumers = consumer_fifo_depths.size();
 
-    do_indent(); stream << "wire ST_IDLE : UInt<2>\n";
-    do_indent(); stream << "wire ST_RUN0 : UInt<2>\n";
-    do_indent(); stream << "wire ST_DONE : UInt<2>\n";
-    stream << "\n";
+    do_indent(); stream << "clock is invalid\n";
+    do_indent(); stream << "reset is invalid\n";
+    do_indent();
+    stream << in_name << " is invalid\n";
+    for(auto &p : consumer_names ) {
+        do_indent();
+        stream << p << " is invalid\n";
+    }
+    do_indent(); stream << "done_out is invalid\n";
+    for(int i=0 ; i < num_of_dimensions ; i++) {
+        do_indent();
+        int nBit = (int)std::ceil(std::log2((float)store_extents[i]));
+        stream << "reg counter" << i << " : UInt<" << nBit << ">, clock with : (reset => (reset, UInt<" << nBit << ">(0)))\n";
+    }
+    for(auto &p : c->getOutputs()) {
+        do_indent();
+        stream << p.first << ".valid <= UInt<1>(0)\n";
+        do_indent();
+        stream << "wire " << p.first << "_inv : " << print_stencil_type(in_stencil) << "\n";
+        do_indent();
+        stream << p.first << "_inv is invalid\n";
+        do_indent();
+        stream << p.first << ".value <= " << p.first << "_inv\n";
+    }
 
-    do_indent(); stream << "ST_IDLE <= UInt<2>(0)\n";
-    do_indent(); stream << "ST_RUN0 <= UInt<2>(1)\n";
-    do_indent(); stream << "ST_DONE <= UInt<2>(3)\n";
-    stream << "\n";
-
-    do_indent(); stream << "reg  r_cs_fsm : UInt<2>, clock with : (reset => (reset, UInt<16>(0)))\n";
-    do_indent(); stream << "wire w_ns_fsm : UInt<2>\n";
-    do_indent(); stream << "wire w_done : UInt<1>\n";
-    stream << "\n";
-
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        do_indent(); stream << "reg  r_counter_var_" << i << " : UInt<16>, clock with : (reset => (reset, UInt<16>(0)))\n";
-    }
-    do_indent(); stream << "reg  r_data_out : " << print_stencil_type(in_stencil) << ", clock\n";
-    do_indent(); stream << "reg  r_valid_out : UInt<1>, clock with : (reset => (reset, UInt<16>(0)))\n";
-
-    do_indent(); stream << "wire ready_in_i : UInt<1>\n";
-    do_indent(); stream << "wire valid_in_i : UInt<1>\n";
-    do_indent(); stream << "wire data_in_i : " << print_stencil_type(in_stencil) << "\n";
-    do_indent(); stream << "wire ready_out_i : UInt<1>\n";
-    stream << "\n";
-
-    do_indent(); stream << "ready_in_i <= ";
-    for(size_t i = 0; i < num_of_consumers; i++) {
-        if (i==(num_of_consumers-1)) // last
-            stream << consumer_names[i] << ".ready";
-        else
-            stream << "or(" << consumer_names[i] << ".ready, ";
-    }
-    for(size_t i = 0; i < num_of_consumers-1; i++) {
-        stream << ")"; // closing OR
-    }
-    stream << "\n";
-    do_indent(); stream << "valid_in_i <= " << in_name << ".valid\n";
-    do_indent(); stream << "data_in_i <= " << in_name << ".value\n";
-    stream << "\n";
-
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_max : UInt<1>\n";
-    }
-    do_indent(); stream << "wire w_counter_all_max : UInt<1>\n";
-    stream << "\n";
-
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_max <= eq(r_counter_var_" << i << ", UInt<16>(" << (store_extents[i] - stencil_sizes[i]) << "))\n";
-    }
-    do_indent(); stream << "w_counter_all_max <= ";
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        if (i==(num_of_dimensions-1))
-            stream << "w_counter_var_" << i << "_max";
-        else
-            stream << "and(w_counter_var_" << i << "_max, ";
-    }
-    for(size_t i = 0; i < num_of_dimensions-1; i++) {
-        stream << ")"; // closing AND
-    }
-    stream << "\n";
-    stream << "\n";
-
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_reset : UInt<1>\n";
-    }
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_inc : UInt<1>\n";
-    }
-    for(size_t i = 0; i < num_of_consumers; i++) {
-        for(size_t j = 0; j < num_of_dimensions; j++) {
-            do_indent(); stream << "wire w_consumer" << i << "_var_" << j << "_ob : UInt<1>\n";
-        }
-        do_indent(); stream << "wire w_consumer" << i << "_ob : UInt<1>\n";
-    }
-    do_indent(); stream << "wire ready_valid : UInt<1>\n";
-    stream << "\n";
-
-    do_indent(); stream << "ready_valid <= and(or(not(r_valid_out), ready_in_i), and(valid_in_i, eq(r_cs_fsm, ST_RUN0)))\n";
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_reset <= or(start_in, and(ready_valid, ";
-        for(size_t j = 0 ; j <= i; j++) {
-            if (j == i) { // last term
-                stream << "w_counter_var_" << j << "_max";
-            } else {
-                stream << "and(w_counter_var_" << j << "_max, ";
+    do_indent();
+    stream << in_name << ".ready <= UInt<1>(0)\n";
+    do_indent();
+    stream << "done_out <= UInt<1>(0)\n";
+    for(int i=0 ; i < num_of_consumers ; i++) {
+        internal_assert(num_of_dimensions > 1);
+        for(int j=0 ; j < num_of_dimensions ; j++) {
+            int nBit = (int)std::ceil(std::log2((float)store_extents[i]));
+            int lb = consumer_offsets[i][j];
+            int ub = consumer_offsets[i][j] + consumer_extents[i][j] - stencil_sizes[j];
+            do_indent(); stream << "node c" << i << "d" << j << "lb = geq(counter" << j << ", UInt<" << nBit << ">(" << lb << "))\n";
+            do_indent(); stream << "node c" << i << "d" << j << "ub = leq(counter" << j << ", UInt<" << nBit << ">(" << ub << "))\n";
+            do_indent(); stream << "node c" << i << "d" << j << "b = and(c" << i << "d" << j << "lb, c" << i << "d" << j << "ub)\n";
+            if (j > 0) {
+                do_indent(); stream << "node c" << i << "d" << j << " = and(c" << i << "d" << j << "b, c" << i << "d" << j-1 << "b)\n";
             }
         }
-        for(size_t j = 0 ; j <= i ; j++) { // closing AND
-            stream << ")";
-        }
-        stream << ")\n"; // closing OR
+        do_indent(); stream << "node c" << i << "r = and(c" << i << "d" << (num_of_dimensions-1) << ", " << consumer_names[i] << ".ready)\n";
+        do_indent(); stream << "node c" << i << " = or(c" << i << "r, not(c" << i << "d" << (num_of_dimensions-1) << "))\n";
     }
-    stream << "\n";
-
-    do_indent(); stream << "w_counter_var_0_inc <= ready_valid\n";
-    if (num_of_dimensions>1) {
-        do_indent(); stream << "w_counter_var_1_inc <= and(ready_valid, and(w_counter_var_0_max, not(w_counter_var_1_max)))\n";
-    }
-    if (num_of_dimensions>2) {
-        do_indent(); stream << "w_counter_var_2_inc <= and(ready_valid, and(w_counter_var_0_max, and(w_counter_var_1_max, not(w_counter_var_2_max))))\n";
-    }
-    if (num_of_dimensions>3) {
-        do_indent(); stream << "w_counter_var_3_inc <= and(ready_valid, and(w_counter_var_0_max, and(w_counter_var_1_max, and(w_counter_var_2_max, not(w_counter_var_3_max)))))\n";
-    }
-    stream << "\n";
-
-    do_indent(); stream << "r_cs_fsm <= w_ns_fsm\n";
-    stream << "\n";
-
-    do_indent(); stream << "w_ns_fsm <= r_cs_fsm\n";
-    do_indent(); stream << "when eq(r_cs_fsm, ST_IDLE) :\n";
-    do_indent(); stream << "  when start_in :\n";
-    do_indent(); stream << "    w_ns_fsm <= ST_RUN0\n";
-    do_indent(); stream << "else when eq(r_cs_fsm, ST_RUN0) :\n";
-    do_indent(); stream << "  when w_done :\n";
-    do_indent(); stream << "    w_ns_fsm <= ST_DONE\n";
-    do_indent(); stream << "else when eq(r_cs_fsm, ST_DONE) :\n";
-    do_indent(); stream << "  w_ns_fsm <= ST_IDLE\n";
-    stream << "\n";
-
-    do_indent(); stream << "w_done <= and(w_counter_all_max, ready_valid)\n";
-    stream << "\n";
-
-    for(size_t i = 0; i < num_of_dimensions; i++) {
-        do_indent(); stream << "when w_counter_var_" << i << "_reset :\n";
-        do_indent(); stream << "  r_counter_var_" << i << " <= UInt<16>(0)\n";
-        do_indent(); stream << "else when w_counter_var_" << i << "_inc :\n";
-        do_indent(); stream << "  r_counter_var_" << i << " <= add(r_counter_var_" << i << ", UInt<16>(" << stencil_steps[i] << "))\n";
-        stream << "\n";
-    }
-
-    do_indent(); stream << "ready_out_i <= or(not(r_valid_out), ready_in_i)\n";
-    stream << "\n";
-
-    do_indent(); stream << "when ready_valid :\n";
-    do_indent(); stream << "  r_data_out <= data_in_i\n";
-    stream << "\n";
-
-    do_indent(); stream << "when ready_valid :\n";
-    do_indent(); stream << "  r_valid_out <= UInt<1>(1)\n";
-    do_indent(); stream << "else when ready_in_i :\n";
-    do_indent(); stream << "  r_valid_out <= UInt<1>(0)\n";
-    stream << "\n";
-
-    for(size_t i = 0; i < num_of_consumers; i++) {
-        for(size_t j = 0; j < num_of_dimensions; j++) {
-            do_indent(); stream << "w_consumer" << i << "_var_" << j << "_ob <= or(lt(r_counter_var_" << j
-                                << ", UInt<16>(" << consumer_offsets[i][j] << ")), gt(r_counter_var_" << j
-                                << ", UInt<16>(" << (consumer_offsets[i][j]+consumer_extents[i][j]-stencil_sizes[j]) << ")))\n";
-        }
-        do_indent(); stream << "w_consumer" << i << "_ob <= ";
-        for(size_t j = 0; j < num_of_dimensions; j++) {
-            if (j==(num_of_dimensions-1))
-                stream << "w_consumer" << i << "_var_" << j << "_ob";
-            else
-                stream << "or(w_consumer" << i << "_var_" << j << "_ob, ";
-        }
-        for(size_t j = 0; j < num_of_dimensions-1; j++) {
-            stream << ")"; // closing OR
-        }
-        stream << "\n";
-    }
-    stream << "\n";
-
-    do_indent(); stream << in_name << ".ready <= or(ready_out_i, ";
-    for(size_t i = 0; i < num_of_consumers; i++) {
-        if (i==(num_of_consumers-1))
-            stream << "w_consumer" << i << "_ob";
-        else
-            stream << "and(w_consumer" << i << "_ob, ";
-    }
-    for(size_t i = 0; i < num_of_consumers-1; i++) {
-        stream << ")";
-    }
-    stream << ")\n";
-    stream << "\n";
-
-    for(size_t i = 0; i < num_of_consumers; i++) {
-        do_indent(); stream << consumer_names[i] << ".valid <= and(r_valid_out, not(w_consumer" << i << "_ob))\n";
-        do_indent(); stream << consumer_names[i] << ".value <= r_data_out\n";
-    }
-    stream << "\n";
-
-    do_indent(); stream << "done_out <= eq(r_cs_fsm, ST_DONE)\n";
-    stream << "\n";
-
-    close_scope("");
-}
-
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forcontrol(ForControl *c)
-{
-    do_indent();
-    stream << "module " << c->getModuleName() << " :\n";
+    do_indent(); stream << "when " << in_name << ".valid :\n";
     open_scope();
-
-    // Print ports.
-    do_indent();
-    stream << "input clock : Clock\n";
-    do_indent();
-    stream << "input reset : UInt<1>\n";
-
-    for(auto &p : c->getInPorts()) {
-        do_indent();
-        stream << "input " << p.first << " : " << print_stencil_type(p.second) << "\n";
+    for(int i=1 ; i < num_of_consumers ; i++) {
+        do_indent(); stream << "node c" << i << "a = and(c" << i << ", c" << (i-1) << ")\n";
     }
-    for(auto &p : c->getOutPorts()) {
-        do_indent();
-        stream << "output " << p.first << " : " << print_stencil_type(p.second) << "\n";
-    }
-    stream << "\n";
-
-    do_indent(); stream << "; Parameters:\n";
-    do_indent(); stream << ";  var=";
-    for(auto &p : c->getVars()) {
-        stream << p << " ";
-    }
-    stream << "\n";
-
-    do_indent(); stream << ";  min=";
-    for(auto &p : c->getMins()) {
-        stream << p << " ";
-    }
-    stream << "\n";
-
-    do_indent(); stream << ";  max=";
-    for(auto &p : c->getMaxs()) {
-        stream << p << " ";
-    }
-    stream << "\n";
-    stream << "\n";
-
-    // Body of ForControl
-    vector<string> var = c->getVars();
-    vector<string> stencil_var = c->getStencilVars();
-    int num_var = var.size(); // outer loops
-    int num_stencil_var = stencil_var.size(); // inner loops
-
-    for(int i = 0 ; i < (num_stencil_var+num_var) ; i++) {
-        do_indent(); stream << "wire VAR_" << i << "_MIN : UInt<16>\n";
-        do_indent(); stream << "wire VAR_" << i << "_MAX : UInt<16>\n";
-    }
-    do_indent(); stream << "wire ST_IDLE  : UInt<2>\n";
-    do_indent(); stream << "wire ST_RUN0  : UInt<2>\n";
-    do_indent(); stream << "wire ST_RUN1  : UInt<2>\n";
-    do_indent(); stream << "wire ST_FLUSH : UInt<2>\n";
-    stream << "\n";
-
-    vector<int> min = c->getMins();
-    vector<int> max = c->getMaxs();
-
-    for(int i = 0 ; i < (num_stencil_var+num_var) ; i++) {
-        do_indent(); stream << "VAR_" << i << "_MIN <= UInt<16>(" << min[num_stencil_var+num_var - i - 1] << ")\n";
-        do_indent(); stream << "VAR_" << i << "_MAX <= UInt<16>(" << max[num_stencil_var+num_var - i - 1] << ")\n";
-    }
-    stream << "\n";
-
-    do_indent(); stream << "ST_IDLE   <= UInt<2>(0)\n";
-    do_indent(); stream << "ST_RUN0   <= UInt<2>(1)\n";
-    do_indent(); stream << "ST_RUN1   <= UInt<2>(2)\n";
-    do_indent(); stream << "ST_FLUSH  <= UInt<2>(3)\n";
-    stream << "\n";
-    do_indent(); stream << "reg  r_cs_fsm : UInt<2>, clock with : (reset => (reset, UInt<2>(0)))\n";
-    do_indent(); stream << "wire w_ns_fsm : UInt<2>\n";
-    do_indent(); stream << "reg  r_done : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
-    do_indent(); stream << "wire w_run : UInt<1>\n";
-    do_indent(); stream << "wire w_flush : UInt<1>\n";
-    stream << "\n";
-
-    for(int i = 0 ; i < num_var + num_stencil_var; i++) {
-        do_indent(); stream << "reg  r_counter_var_" << i << " : UInt<16>, clock with : (reset => (reset, UInt<16>(0)))\n";
-    }
-    do_indent(); stream << "reg  r_flush_counter : UInt<8>, clock with : (reset => (reset, UInt<8>(0)))\n";
-    stream << "\n";
-
-    for(int i = 0 ; i < num_var + num_stencil_var; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_max : UInt<1>\n";
-    }
-    for(int i = 0 ; i < num_var + num_stencil_var; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_min : UInt<1>\n";
-    }
-    do_indent(); stream << "wire w_counter_all_max : UInt<1>\n";
-    do_indent(); stream << "wire w_flush_done : UInt<1>\n";
-    for(int i = 0 ; i < num_var + num_stencil_var; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_max <= eq(r_counter_var_" << i << ", VAR_" << i << "_MAX)\n";
-    }
-    for(int i = 0 ; i < num_var + num_stencil_var; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_min <= eq(r_counter_var_" << i << ", VAR_" << i << "_MIN)\n";
+    do_indent(); stream << "node allOutReady = c" << num_of_dimensions-1 << "a\n";
+    do_indent(); stream << "when allOutReady :\n";
+    open_scope();
+    do_indent(); stream << in_name << ".ready <= UInt<1>(1)\n";
+    for(int i=0 ; i < num_of_consumers ; i++) {
+        do_indent(); stream << "when c" << i << "r :\n";
+        open_scope();
+        do_indent(); stream << consumer_names[i] << ".valid <= UInt<1>(1)\n";
+        do_indent(); stream << consumer_names[i] << ".value <= " << in_name << ".value\n";
+        close_scope("");
     }
 
-    do_indent(); stream << "w_counter_all_max <= ";
-    for(int i = num_stencil_var ; i < (num_stencil_var + num_var) ; i++) {
-        if (i == (num_stencil_var+num_var-1)) // last term
-            stream << "w_counter_var_" << i << "_max";
-        else
-            stream << "and(w_counter_var_" << i << "_max, ";
-    }
-    for(int i = 0 ; i < num_var-1 ; i++) {
-        stream << ")";
-    }
-    stream << "\n";
-    stream << "\n";
-
-    for(int i = 0 ; i < num_var + num_stencil_var; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_reset : UInt<1>\n";
-    }
-    for(int i = 0 ; i < num_var + num_stencil_var; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_inc : UInt<1>\n";
-    }
-    do_indent(); stream << "wire ready_valid : UInt<1>\n";
-    stream << "\n";
-
-    // input names are input stream names.
-    map<string, FIRRTL_Type> streams = c->getInputs();
-    vector<string> str;
-    for(auto &i : streams) {
-        str.push_back(i.first); // string name
-    }
-    internal_assert(str.size()!=0);
-    do_indent(); stream << "ready_valid <= and(ready_in, and(eq(r_cs_fsm, ST_RUN0), ";
-    for(unsigned i = 0 ; i < str.size() ; i++) {
-        if (i == (str.size()-1)) stream << str[i];
-        else stream << "and(" << str[i] << ", ";
-    }
-    for(unsigned i = 0 ; i < str.size()-1 ; i++) {
-        stream << ")";
-    }
-    stream << "))\n";
-
-    if (num_stencil_var>0) { // if there is stencil loop
-        do_indent(); stream << "w_counter_var_0_reset <= or(start_in, w_counter_var_0_max)\n";
-        if (num_stencil_var>1) {
-            do_indent(); stream << "w_counter_var_1_reset <= or(start_in, and(w_counter_var_0_max, w_counter_var_1_max))\n";
+    for(int i=0 ; i < num_of_dimensions ; i++) {
+        if (i > 0) {
+            do_indent(); stream << "when counter" << i-1 << "_is_max :\n";
+            open_scope();
         }
-        if (num_stencil_var>2) {
-            do_indent(); stream << "w_counter_var_2_reset <= or(start_in, and(w_counter_var_0_max, and(w_counter_var_1_max, w_counter_var_2_max)))\n";
+        int nBit = (int)std::ceil(std::log2((float)store_extents[i]));
+        int max = store_extents[i] - stencil_sizes[i];
+        int step = stencil_steps[i];
+        do_indent(); stream << "node counter" << i << "_is_max = eq(counter" << i << ", UInt<" << nBit << ">(" << max << "))\n";
+        do_indent(); stream << "node counter" << i << "_inc_c = add(counter" << i << ", UInt<" << nBit << ">(" << step << "))\n";
+        do_indent(); stream << "node counter" << i << "_inc = tail(counter" << i << "_inc_c, 1)\n";
+        do_indent(); stream << "counter" << i << " <= counter" << i << "_inc\n";
+        do_indent(); stream << "when counter" << i << "_is_max :\n";
+        do_indent(); stream << "  counter" << i << " <= UInt<1>(0)\n";
+        if (i == (num_of_dimensions-1)) { // last one
+            do_indent(); stream << "  done_out <= UInt<1>(1)\n";
         }
-    }
-    for(int i = num_stencil_var ; i < (num_stencil_var + num_var) ; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_reset <= or(start_in, and(ready_valid, ";
-
-        for(int j = num_stencil_var ; j <= i; j++) {
-            if (j == i) { // last term
-                stream << "w_counter_var_" << j << "_max";
-            } else {
-                stream << "and(w_counter_var_" << j << "_max, ";
-            }
-        }
-        for(int j = num_stencil_var ; j <= i ; j++) { // closing AND
-            stream << ")";
-        }
-        stream << ")\n"; // closing OR
-    }
-    stream << "\n";
-
-    if (num_stencil_var>0) { // if there is stencil loop
-        do_indent(); stream << "w_counter_var_0_inc <= or(ready_valid, eq(r_cs_fsm, ST_RUN1))\n";
-        if (num_stencil_var>1) {
-            do_indent(); stream << "w_counter_var_1_inc <= and(eq(r_cs_fsm, ST_RUN1), and(w_counter_var_0_max, not(w_counter_var_1_max)))\n";
-        }
-        if (num_stencil_var>2) {
-            do_indent(); stream << "w_counter_var_2_inc <= and(eq(r_cs_fsm, ST_RUN1), and(w_counter_var_0_max, and(w_counter_var_1_max, not(w_counter_var_2_max))))\n";
-        }
-        // TODO: w_counter_var_3_inc Do we need?
-    }
-    for(int i = num_stencil_var ; i < (num_stencil_var + num_var) ; i++) {
-        if (i==0) { // when there is no stencil loop
-            do_indent(); stream << "w_counter_var_0_inc <= ready_valid\n";
-        } else {
-            do_indent(); stream << "w_counter_var_" << i << "_inc <= and(ready_valid, ";
-            for(int j = 1 ; j <= i; j++) {
-                if (j == i) { // last term
-                    stream << "not(w_counter_var_" << j << "_max)";
-                } else {
-                    stream << "and(w_counter_var_" << j << "_max, ";
-                }
-            }
-            for(int j = 1 ; j < i ; j++) { // closing AND
-                stream << ")";
-            }
-            stream << ")\n"; // closing OR
-        }
-    }
-    stream << "\n";
-
-    // FSM
-    do_indent(); stream << "r_cs_fsm <= w_ns_fsm\n";
-    do_indent(); stream << "w_ns_fsm <= r_cs_fsm\n";
-    do_indent(); stream << "when eq(r_cs_fsm, ST_IDLE) :\n";
-    do_indent(); stream << "  when start_in :\n";
-    do_indent(); stream << "    w_ns_fsm <= ST_RUN0\n";
-    do_indent(); stream << "  else :\n";
-    do_indent(); stream << "    skip\n";
-    do_indent(); stream << "else when eq(r_cs_fsm, ST_RUN0) :\n";
-    if (num_stencil_var>0) { // when there is stencil loop
-        do_indent(); stream << "  when and(ready_in, ";
-        for(unsigned i = 0 ; i < str.size() ; i++) {
-            if (i == (str.size()-1)) stream << str[i];
-            else stream << "and(" << str[i] << ", ";
-        }
-        for(unsigned i = 0 ; i < str.size()-1 ; i++) {
-            stream << ")";
-        }
-        stream << ") :\n";
-        do_indent(); stream << "    w_ns_fsm <= ST_RUN1\n";
-        do_indent(); stream << "  else when r_done :\n";
-        do_indent(); stream << "    w_ns_fsm <= ST_FLUSH\n";
-        do_indent(); stream << "  else :\n";
-        do_indent(); stream << "    skip\n";
-        do_indent(); stream << "else when eq(r_cs_fsm, ST_RUN1) :\n";
-        do_indent(); stream << "  when w_counter_var_0_max :\n";
-        do_indent(); stream << "    w_ns_fsm <= ST_RUN0\n";
-        do_indent(); stream << "  else :\n";
-        do_indent(); stream << "    skip\n";
-    } else {
-        do_indent(); stream << "  when r_done :\n";
-        do_indent(); stream << "    w_ns_fsm <= ST_FLUSH\n";
-        do_indent(); stream << "  else :\n";
-        do_indent(); stream << "    skip\n";
-    }
-    do_indent(); stream << "else when eq(r_cs_fsm, ST_FLUSH) :\n";
-    do_indent(); stream << "  when w_flush_done :\n";
-    do_indent(); stream << "    w_ns_fsm <= ST_IDLE\n";
-    do_indent(); stream << "  else :\n";
-    do_indent(); stream << "    skip\n";
-    do_indent(); stream << "else :\n";
-    do_indent(); stream << "  skip\n";
-    stream << "\n";
-
-    do_indent(); stream << "when start_in :\n";
-    do_indent(); stream << "  r_done <= UInt<1>(0)\n";
-    do_indent(); stream << "else when and(w_counter_all_max, ready_valid) :\n";
-    do_indent(); stream << "  r_done <= UInt<1>(1)\n";
-    do_indent(); stream << "else :\n";
-    do_indent(); stream << "  skip\n";
-    stream << "\n";
-
-    do_indent(); stream << "when w_counter_var_0_reset :\n";
-    do_indent(); stream << "  r_counter_var_0 <= VAR_0_MIN\n";
-    do_indent(); stream << "else when w_counter_var_0_inc :\n";
-    do_indent(); stream << "  r_counter_var_0 <= add(r_counter_var_0, UInt<1>(1))\n";
-    do_indent(); stream << "else :\n";
-    do_indent(); stream << "  skip\n";
-    stream << "\n";
-
-    if ((num_stencil_var+num_var)>1) {
-        do_indent(); stream << "when w_counter_var_1_reset :\n";
-        do_indent(); stream << "  r_counter_var_1 <= VAR_1_MIN\n";
-        do_indent(); stream << "else when w_counter_var_1_inc :\n";
-        do_indent(); stream << "  r_counter_var_1 <= add(r_counter_var_1, UInt<1>(1))\n";
-        do_indent(); stream << "else :\n";
         do_indent(); stream << "  skip\n";
-        stream << "\n";
     }
 
-    if ((num_stencil_var+num_var)>2) {
-        do_indent(); stream << "when w_counter_var_2_reset :\n";
-        do_indent(); stream << "  r_counter_var_2 <= VAR_2_MIN\n";
-        do_indent(); stream << "else when w_counter_var_2_inc :\n";
-        do_indent(); stream << "  r_counter_var_2 <= add(r_counter_var_2, UInt<1>(1))\n";
-        do_indent(); stream << "else :\n";
-        do_indent(); stream << "  skip\n";
-        stream << "\n";
-    }
-    // TODO: num_var>3
-
-    do_indent(); stream << "when start_in :\n";
-    do_indent(); stream << "  r_flush_counter <= UInt<8>(0)\n";
-    do_indent(); stream << "else when w_run :\n";
-    do_indent(); stream << "  when lt(r_flush_counter, depth) :\n";
-    do_indent(); stream << "    r_flush_counter <= add(r_flush_counter, UInt<1>(1))\n";
-    do_indent(); stream << "  else :\n";
-    do_indent(); stream << "    skip\n";
-    stream << "\n";
-
-    if (num_stencil_var>0) {
-        do_indent(); stream << "w_run <= or(ready_valid, eq(r_cs_fsm, ST_RUN1))\n";
-    } else {
-        do_indent(); stream << "w_run <= ready_valid\n";
-    }
-    do_indent(); stream << "w_flush <= and(eq(r_cs_fsm, ST_FLUSH), ready_in)\n";
-    do_indent(); stream << "w_flush_done <= and(eq(r_cs_fsm, ST_FLUSH), eq(r_flush_counter, UInt<16>(0)))\n";
-    do_indent(); stream << "enable <= or(w_run, w_flush)\n";
-    do_indent(); stream << "load <= or(and(w_run, eq(r_flush_counter, depth)), w_flush)\n";
-    if (num_stencil_var>0) {
-        do_indent(); stream << "ready_out <= and(eq(r_cs_fsm, ST_RUN1), eq(w_ns_fsm, ST_RUN0))\n";
-    } else {
-        do_indent(); stream << "ready_out <= ready_valid\n";
-    }
-    stream << "\n";
-
-    for(int i = 0 ; i < num_stencil_var ; i++) {
-        do_indent(); stream << stencil_var[num_stencil_var - 1 - i] << " <= r_counter_var_" << i << "\n";
-    }
-    for(int i = 0 ; i < num_var ; i++) {
-        do_indent(); stream << var[num_var - 1 - i] << " <= r_counter_var_" << i+num_stencil_var << "\n";
+    for(int i = num_of_dimensions - 2 ; i >= 0; i--) {
+        close_scope("counter" + std::to_string(i));
     }
 
-    do_indent(); stream << "done_out <= r_done\n";
-    stream << "\n";
+    close_scope("allOutReady");
 
-    close_scope("");
-}
+    do_indent(); stream << "else :\n";
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_computestage(ComputeStage *c)
-{
-    do_indent();
-    stream << "module " << c->getModuleName() << " :\n";
     open_scope();
-
-    // Print ports.
-    do_indent();
-    stream << "input clock : Clock\n";
-    do_indent();
-    stream << "input reset : UInt<1>\n";
-
-    for(auto &p : c->getInPorts()) {
-        do_indent();
-        stream << "input " << p.first << " : " << print_stencil_type(p.second) << "\n";
-    }
-    for(auto &p : c->getOutPorts()) {
-        do_indent();
-        stream << "output " << p.first << " : " << print_stencil_type(p.second) << "\n";
-    }
-    stream << "\n";
-
-    // Print Regs.
-    do_indent();
-    stream << "; Regs\n";
-    for(auto &p : c->getRegs()) {
-        do_indent();
-        stream << "reg " << p.first << " : " << print_stencil_type(p.second) << ", clock\n";
-    }
-    stream << "\n";
-
-    // Print Wires.
-    do_indent();
-    stream << "; Wires\n";
-    for(auto &p : c->getWires()) {
-        do_indent();
-        stream << "wire " << p.first << " : " << print_stencil_type(p.second) << "\n";
-    }
-    stream << "\n";
-
-    // Print connections.
-    do_indent();
-    stream << "; Connections\n";
-    for(auto &p : c->getOutPorts()) {
-        do_indent();
-        stream << p.first << " is invalid\n";
-    }
-    map<string, string> cn = c->getConnects();
-    for(auto &p : c->getConnectKeys()) {
-        do_indent();
-        stream << p << " <= " << cn[p] << "\n";
-    }
-    stream << "\n";
+    do_indent(); stream << in_name << ".ready <= UInt<1>(0)\n";
     close_scope("");
-}
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_wrstream(WrStream *c)
-{
-    do_indent();
-    stream << "module " << c->getModuleName() << " :\n";
-    open_scope();
+    close_scope(in_name + ".valid");
 
-    // Print ports.
-    do_indent();
-    stream << "input clock : Clock\n";
-    do_indent();
-    stream << "input reset : UInt<1>\n";
-
-    for(auto &p : c->getInPorts()) {
-        do_indent();
-        stream << "input " << p.first << " : " << print_stencil_type(p.second) << "\n";
-    }
-    for(auto &p : c->getOutPorts()) {
-        do_indent();
-        stream << "output " << p.first << " : " << print_stencil_type(p.second) << "\n";
-    }
+    close_scope(" end of " + c->getModuleName());
     stream << "\n";
-
-    vector<string> v = c->getStencilVars();
-    vector<string> s = c->getVars();
-    vector<int> m = c->getMaxs();
-
-    do_indent(); stream << "; Parameters:\n";
-    do_indent(); stream << ";  Stencil Vars=";
-    for(unsigned i = 0; i < v.size(); i++ ) {
-        stream << v[i] << " ";
-    }
-    stream << "\n";
-    do_indent(); stream << ";  Maxs=";
-    for(unsigned i = 0; i < m.size(); i++ ) {
-        stream << m[i] << " ";
-    }
-    stream << "\n";
-    stream << "\n";
-
-    FIRRTL_Type outtype;
-    for(auto &p : c->getOutputs()) { // TODO: assert expect only one
-        outtype = p.second;
-    }
-    do_indent(); stream << "reg  r_valid_out : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
-    do_indent(); stream << "reg  r_data_out : " << print_stencil_type(outtype) << ", clock\n";
-    do_indent(); stream << "wire valid_in : UInt<1>\n";
-    stream << "\n";
-
-    if (v.empty()) {
-        do_indent(); stream << "valid_in <= load\n";
-    } else {
-        do_indent(); stream << "valid_in <= and(load, ";
-        for(unsigned i = 0; i < v.size(); i++ ) {
-            if (i == (v.size()-1))
-                stream << "eq(" << v[i] << ", UInt<16>(" << m[i] << "))";
-            else
-                stream << "and(eq(" << v[i] << ", UInt<16>(" << m[i] << ")), ";
-        }
-        for(unsigned i = 0; i < v.size(); i++ ) {
-            stream << ")\n";
-        }
-    }
-    stream << "\n";
-
-    do_indent(); stream << "when valid_in :\n";
-    do_indent(); stream << "  r_valid_out <= UInt<1>(1)\n";
-    do_indent(); stream << "else when ready_in :\n";
-    do_indent(); stream << "  r_valid_out <= UInt<1>(0)\n";
-    stream << "\n";
-
-    do_indent(); stream << "when load :\n";
-    if (v.empty()) {
-        do_indent(); stream << "  r_data_out <= data_in\n";
-    } else {
-        // FIXME: more than one stencil variable m.size() > 1
-        for(int j = 0; j <= m[0]; j++ ) {
-            if (j==0) {
-                do_indent(); stream << "  when eq(";
-            } else  {
-                do_indent(); stream << "  else when eq(";
-            }
-            for(unsigned i = 0; i < v.size(); i++ ) { // FIXME: v.size()==1 for now.
-                stream << v[i] << ", UInt<16>(" << j << ")";
-            }
-            stream << ") :\n";
-            do_indent(); stream << "    r_data_out";
-            for(unsigned i = 0; i < s.size(); i++ ) {
-                stream << "[0]";
-            }
-            for(unsigned i = 0; i < v.size(); i++ ) {
-                stream << "[" << j << "]";
-            }
-            stream << " <= data_in";
-            for(unsigned i = v.size(); i < v.size() + s.size(); i++ ) {
-                stream << "[0]";
-            }
-            for(unsigned i = 0; i < v.size(); i++ ) {
-                stream << "[" << j << "]";
-            }
-            stream << "\n";
-        }
-    }
-    do_indent(); stream << "data_out <= r_data_out\n";
-    do_indent(); stream << "valid_out <= r_valid_out\n";
-    stream << "\n";
-
-    close_scope("");
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::open_scope()
@@ -2705,6 +2288,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::open_scope()
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::close_scope(const std::string &comment)
 {
+    do_indent(); stream << "skip ; " << comment << "\n";
     cache.clear();
     indent -= 2;
 }
@@ -2736,7 +2320,9 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit_binop(Type t, Expr a, Expr b, 
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Add *op) {
-    visit_binop(op->type, op->a, op->b, "add");
+    ostringstream oss; // TODO: better way?
+    oss << "tail(add(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1)";
+    print_assignment(op->type, oss.str());
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Sub *op) {
@@ -2745,17 +2331,21 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Sub *op) {
     Type t;
     //oss << "asUInt(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "))";
     if ((op->type).is_uint()) {
-        oss << "asUInt(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "))";
+        oss << "asUInt(tail(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1))";
         t = UInt(op->type.bits());
     } else {
-        oss << "sub(" << print_expr(op->a) << ", " << print_expr(op->b) << ")";
+        oss << "tail(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1)";
         t = op->type;
     }
     print_assignment(t, oss.str());
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Mul *op) {
-    visit_binop(op->type, op->a, op->b, "mul");
+    ostringstream oss;
+    //visit_binop(op->type, op->a, op->b, "mul");
+    int bits = op->type.bits();
+    oss << "bits(mul(" << print_expr(op->a) << ", " << print_expr(op->b) << "), " << bits-1 << ", 0)";
+    print_assignment(op->type, oss.str());
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Div *op) {
@@ -3030,6 +2620,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
 
         id = "0";
     } else if (op->name == "write_stream") {
+        internal_assert(current_fb); // Inside ForBlock
         // normal case
         // IR: write_stream(buffered.stencil_update.stream, buffered.stencil_update)
         const Variable *v0 = op->args[0].as<Variable>();
@@ -3037,46 +2628,13 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
         string a0 = print_name(v0->name);
         string a1 = print_name(v1->name);
         FIRRTL_Type stream_type = top->getWire("wire_" + a0); // TODO: assert.
-        FIRRTL_Type stencil_type = stream_type;
-        stencil_type.type = FIRRTL_Type::StencilContainerType::Stencil; // data field only.
-        // This is inside ComputeStage inside ForBlock.
-        // Add output port at ComputeStage and ForBlock and connect them.
-        // Add wire at top so that next block can find its stencil type.
-        //   output stream_name : <type>
-        //   reg r_stencil_name : <type>
-        //   wire wire_stencil_name : <type>
-        //   r_stencil_name <= wire_stencil_name
-        //   stream_name <= r_stencil_name
-
-        // WrStream was created at For just to add scan var port because our base design for WrStream requires that.
-        //WrStream *ws = new WrStream("WS_" + a0);
-        current_ws->addInput("data_in", stencil_type);
-        current_ws->addInPort("load", wire_1bit);
-        current_ws->addInPort("ready_in", wire_1bit);
-        current_ws->addOutput("data_out", stencil_type);
-        current_ws->addOutPort("valid_out", wire_1bit);
-
-        // Connect clock/reset
-        current_fb->addConnect(current_ws->getInstanceName() + ".clock", "clock");
-        current_fb->addConnect(current_ws->getInstanceName() + ".reset", "reset");
-
-        current_fb->addConnect(current_fc->getInstanceName() + ".ready_in", a0 + ".ready");
-        current_fb->addConnect(current_ws->getInstanceName() + ".ready_in", a0 + ".ready");
-        current_fb->addConnect(a0 + ".valid", current_ws->getInstanceName() + ".valid_out");
-        current_fb->addConnect(current_ws->getInstanceName() + ".load", current_fb->getInstanceName() + ".load");
-
-        current_cs->addOutput(a1, stencil_type);
         current_fb->addOutput(a0, stream_type);
-        current_fb->addConnect(current_ws->getInstanceName() + ".data_in", current_cs->getInstanceName() + "." + a1);
-        current_fb->addConnect(a0 + ".value", current_ws->getInstanceName() + ".data_out");
-        current_fb->addConnect(current_ws->getInstanceName() + ".load", current_fc->getInstanceName() + ".load");
 
-        for(int i= for_stencilvar_list.size()-1; i >= 0; i--) {
-            current_ws->addInPort(for_stencilvar_list[i], wire_16bit);
-            current_fb->addConnect(current_ws->getInstanceName() + "." + for_stencilvar_list[i], current_cs->getInstanceName() + "." + for_stencilvar_list[i] + "_out");
-        }
+        // Inside ForBlock, print to ForBlock oss_body directly.
+        current_fb->print(a0 + ".value <= " + a1 + "\n");
+        current_fb->print(a0 + ".valid <= pp2_valid\n");
 
-        // Create FIFO following IO
+        // Create FIFO following ForBlock
         FIFO *fifo = new FIFO("FIFO_" + a0);
         fifo->addInput("data_in", stream_type);
         fifo->addOutput("data_out", stream_type);
@@ -3110,7 +2668,13 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
             const Variable *v = op->args[0].as<Variable>();
             string arg_name = print_name(rootName(v->name)); // Use simple name for output.
             interface->addOutput(arg_name, stype); // axi stream
-            interface->setStoreExtents(stream_type.store_extents);
+            vector<int> store_extents;
+            for (size_t i = 2; i < op->args.size(); i += 2) {
+                const IntImm *imm = op->args[i+1].as<IntImm>();
+                internal_assert(imm);
+                store_extents.push_back(imm->value+1);
+            }
+            interface->setStoreExtents(store_extents);
             top->addOutput(arg_name, stype);
             //numOutputs++;
 
@@ -3132,8 +2696,10 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
             top->addConnect(interface->getInstanceName() + ".start_in", sif->getInstanceName() + ".start");    // IO.start_in <= SIF.start
             top->addConnect(sif->getInstanceName() + "." + done, interface->getInstanceName() + ".done_out");  // SIF.done <= IO.done_out
         }
+        id = "0";
     } else if (op->name == "read_stream") {
         internal_assert(op->args.size() == 2 || op->args.size() == 3);
+        internal_assert(current_fb); // Inside ForBlock, print to ForBlock oss_body.
         string a1 = print_name(print_expr(op->args[1]));
 
         const Variable *stream_name_var = op->args[0].as<Variable>();
@@ -3147,16 +2713,10 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
         }
         FIRRTL_Type stype = top->getWire("wire_" + stream_name); // get stencil type.
         current_fb->addInput(stream_name, stype);
-        FIRRTL_Type stencil_type = stype;
-        stencil_type.type = FIRRTL_Type::StencilContainerType::Stencil; // data field only will be input to ComputeState.
-        current_cs->addInput(a1, stencil_type);
-        current_fb->addConnect(current_cs->getInstanceName() + "." + a1, stream_name + ".value");
         top->addConnect(current_fb->getInstanceName() + "." + stream_name, "wire_" + stream_name);
 
-        // connect valid/ready
-        current_fc->addInput("valid_in_" + stream_name, wire_1bit);
-        current_fb->addConnect(current_fc->getInstanceName() + ".valid_in_" + stream_name, stream_name + ".valid");
-        current_fb->addConnect(stream_name + ".ready", current_fc->getInstanceName() + ".ready_out");
+        // Inside ForBlock, print to ForBlock oss_body directly.
+        current_fb->print(a1 + " <= " + stream_name + ".value\n");
         id = "0";
     } else if (ends_with(op->name, ".stencil") ||
                ends_with(op->name, ".stencil_update")) {
@@ -3382,7 +2942,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const AssertStmt *op)
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const ProducerConsumer *op)
 {
     if (ends_with(op->name, ".stream")) {
-        producename = op->name; // keep last ProcuderConsumer name as a produce name to be used in ForBlock naming.
+        producename = op->name; // Used as a name containing ForBlock name.
     }
     print_stmt(op->body);
 }
@@ -3396,29 +2956,11 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
     FIRRTL_Type wire_8bit = {FIRRTL_Type::StencilContainerType::Scalar,UInt(8),Region(),0,{}};
     FIRRTL_Type wire_16bit = {FIRRTL_Type::StencilContainerType::Scalar,UInt(16),Region(),0,{}};
 
+    string var_name = print_name(op->name);
     int id_min = ((op->min).as<IntImm>())->value;
     int id_extent = ((op->extent).as<IntImm>())->value;
 
-    if (for_scanvar_list.empty()) { // only one ForControl, ForBlock, ComputeStage per For statement group.
-
-        // TODO assert current_fb, current_cs is null.
-
-        // Create ForControl component
-        string var_name = print_name(op->name);
-        ForControl *fc = new ForControl("FC_" + print_name(producename));
-        fc->addInPort("start_in", wire_1bit);
-        fc->addOutPort("done_out", wire_1bit);
-        fc->addInPort("ready_in", wire_1bit); // from back stage
-        fc->addOutPort("ready_out", wire_1bit); // to previous stage
-        fc->addOutPort("enable", wire_1bit); // to ComputeStage
-        fc->addOutPort(var_name, wire_16bit); // to ComputeStage
-        fc->addOutPort("load", wire_1bit); // to WrStream
-        fc->addInPort("depth", wire_8bit); // parameter constant
-        fc->addVar(var_name);
-        fc->addMin(id_min);
-        fc->addMax(id_extent-1);
-        for_scanvar_list.push_back(var_name); // for ForBlock generation
-        current_fc = fc; // for ForBlock generation
+    if (for_scanvar_list.empty()) { // only one ForBlock per For-loop group.
 
         // Create ForBlock component
         ForBlock *fb = new ForBlock("FB_" + print_name(producename));
@@ -3427,20 +2969,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
         // Add to top
         top->addInstance(static_cast<Component*>(fb));
 
-        // Create ComputeStage component
-        ComputeStage *cs = new ComputeStage("CS_" + print_name(producename));
-        current_cs = cs;
-        cs->addInPort("enable", wire_1bit); // from ForControl
-
-        // Add to ForBlock
-        fb->addInstance(static_cast<Component*>(cs));
-        fb->addInstance(static_cast<Component*>(fc));
-
         // Connect clock/reset
-        fb->addConnect(fc->getInstanceName() + ".clock", "clock");
-        fb->addConnect(fc->getInstanceName() + ".reset", "reset");
-        fb->addConnect(cs->getInstanceName() + ".clock", "clock");
-        fb->addConnect(cs->getInstanceName() + ".reset", "reset");
         top->addConnect(fb->getInstanceName() + ".clock", "clock");
         top->addConnect(fb->getInstanceName() + ".reset", "reset");
 
@@ -3449,27 +2978,12 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
         sif->addInPort(done, wire_1bit);
         fb->addInPort("start_in", wire_1bit);
         fb->addOutPort("done_out", wire_1bit);
+        fb->addVar(var_name);
+        fb->addMin(id_min);
+        fb->addMax(id_extent-1);
+        for_scanvar_list.push_back(var_name);
         top->addConnect(fb->getInstanceName() + ".start_in", sif->getInstanceName() + ".start");
         top->addConnect(sif->getInstanceName() + "." + done, fb->getInstanceName() + ".done_out");
-        fb->addConnect(fc->getInstanceName() + ".start_in", "start_in");
-        fb->addConnect("done_out", fc->getInstanceName() + ".done_out");
-
-        // Constant parameter
-        //fb->addConnect(fc->getInstanceName() + "." + "depth", "UInt<8>($$)"); // TODO is 8-bit enough? TODO, back-annotation after re-timing.
-        fb->addConnect(fc->getInstanceName() + "." + "depth", "UInt<8>(0)"); // FIXME later
-
-        // Connect loop variable between ForControl and ComputeStage
-        cs->addInPort(var_name, wire_16bit);
-        fb->addConnect(cs->getInstanceName() + "." + var_name, fc->getInstanceName() + "." + var_name);
-
-        // Controls
-        fb->addConnect(cs->getInstanceName() + ".enable", fc->getInstanceName() + ".enable");
-
-        // Create WrStream here just to add scan var port because our base design for WrStream requires that.
-        WrStream *ws = new WrStream("WS_" + print_name(producename));
-        ws->addVar(var_name);
-        current_ws = ws;
-        fb->addInstance(static_cast<Component*>(ws));
 
         // Add parameter ports and connect them
         FIRRTL_For_Closure c(op->body);
@@ -3478,44 +2992,22 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
         vector<string> args = c.arguments(); // extract used variables.
         for(auto &s: args) { // Create ports and connect for variables.
             string a = print_name(s);
+            debug(3) << "CodeGen_FIRRTL::visit arg " << a << "\n";
             if (for_scanvar_list[0] != a) { // ignore scan var
                 FIRRTL_Type stype = top->getWire("wire_" + a);
-                cs->addInPort(a, stype);
                 fb->addInPort(a, stype);
-                fb->addConnect(cs->getInstanceName() + "." + a, a);
                 top->addConnect(fb->getInstanceName() + "." + a, "wire_" + a);
             }
         }
 
     } else {
-        // If ForControl is already created, just add loop variable ports and parameters.
-        string var_name = print_name(op->name);
-        current_fc->addOutPort(var_name, wire_16bit);
-        current_fc->addMin(id_min);
-        current_fc->addMax(id_extent-1);
-        if (!contain_read_stream(op->body)) { // iteration over stencil TODO: better way?
-            current_fc->addStencilVar(var_name);
-            for_stencilvar_list.push_back(var_name);
-
-            // Connect loop variable between ComputeStage and WrStream
-            current_cs->addOutPort(var_name+"_out", wire_16bit);
-            current_ws->addInPort(var_name, wire_16bit);
-            current_ws->addStencilVar(var_name);
-            current_ws->addMax(id_extent-1); // to know the end of stencil update
-            current_fb->addConnect(current_ws->getInstanceName() + "." + var_name, current_cs->getInstanceName() + "." + var_name + "_out");
-        } else {
-            current_fc->addVar(var_name);
-            current_ws->addVar(var_name);
-            for_scanvar_list.push_back(var_name);
-        }
-
-        // Connect loop variable between ForControl and ComputeStage
-        current_cs->addInPort(var_name, wire_16bit);
-        current_fb->addConnect(current_cs->getInstanceName() + "." + var_name, current_fc->getInstanceName() + "." + var_name);
-
+        internal_assert(current_fb);
+        // If ForBlock is already created, just add loop variable ports and loop bound.
+        current_fb->addVar(var_name);
+        current_fb->addMin(id_min);
+        current_fb->addMax(id_extent-1);
+        for_scanvar_list.push_back(var_name);
     }
-
-    open_scope();
 
     if (!contain_for_loop(op->body)) { // inner most loop
         // TODO: Do we need to keep this?
@@ -3523,23 +3015,16 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
 
     print(op->body);
 
-    close_scope("");
+    for_scanvar_list.pop_back();
 
-    if (!contain_read_stream(op->body)) { // iteration over stencil
-        for_stencilvar_list.pop_back();
-    } else {
-        for_scanvar_list.pop_back();
-    }
     if (for_scanvar_list.empty()) {
-        current_fc = nullptr;
         current_fb = nullptr;
-        current_cs = nullptr;
-        current_ws = nullptr;
     }
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Provide *op)
 {
+    debug(3) << "CodeGen_FIRRTL::visit Provide " << op->name << " args:" << op->args[0] << " values:" << op->values[0] << "\n--\n";
     if (ends_with(op->name, ".stencil") ||
         ends_with(op->name, ".stencil_update")) {
         ostringstream oss;
@@ -3561,9 +3046,12 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Provide *op)
                 oss << "][";
         }
         oss << "]";
-        if (current_cs!=nullptr) {
-            current_cs->addConnect(oss.str(), id_value);
-        } else {
+        if (current_fb!=nullptr) {
+          // Inside ForBlock, print to ForBlock oss_body directly.
+          current_fb->print(oss.str() + " <= " + id_value + "\n");
+          current_fb->print("pp2_valid <= pp1_valid\n");
+        } else { // TODO Do we need this?
+            internal_assert(false) << "Provide at outside of ForBlock\n";
             top->addConnect(oss.str(), id_value);
         }
 
@@ -3588,7 +3076,6 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Realize *op)
 {
     if (ends_with(op->name, ".stream")) {
         internal_assert(op->types.size() == 1);
-        //allocations.push(op->name, {op->types[0], "null"}); // TODO: do we need this?
         std::vector<int> store_extents;
         for(size_t i = 0; i < op->bounds.size(); i++) store_extents.push_back(1); // default
         FIRRTL_Type stream_type({FIRRTL_Type::StencilContainerType::Stream,
@@ -3598,33 +3085,44 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Realize *op)
         // traverse down
         op->body.accept(this);
 
-        //allocations.pop(op->name);
-
     } else if (ends_with(op->name, ".stencil") ||
                ends_with(op->name, ".stencil_update")) {
-        //internal_assert(op->types.size() == 1);
-        ////allocations.push(op->name, {op->types[0], "null"}); // TODO: do we need this?
-        //std::vector<int> store_extents;
-        //for(size_t i = 0; i < op->bounds.size(); i++) store_extents.push_back(1); // default
-        //FIRRTL_Type stream_type({FIRRTL_Type::StencilContainerType::Stencil,
-        //            op->types[0], op->bounds, 1, store_extents});
-        //current_cs->addReg("r_" + print_name(op->name), stream_type);
+        //internal_assert(op->types.size() == 1); // TODO ??
+        internal_assert(current_fb);
+        std::vector<int> store_extents;
+        for(size_t i = 0; i < op->bounds.size(); i++) store_extents.push_back(1); // default
+        FIRRTL_Type stream_type({FIRRTL_Type::StencilContainerType::Stencil,
+                    op->types[0], op->bounds, 1, store_extents});
+        current_fb->addReg(print_name(op->name), stream_type);
 
         op->body.accept(this);
 
-        //allocations.pop(op->name);
     } else {
         visit(op);
     }
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const IfThenElse *op) {
-    if (contain_read_stream(op->then_case)||
-        contain_write_stream(op->then_case)) {
-        // Ignore. It's function is done by ForControl.
-        IRVisitor::visit(op);
+    if (current_fb!=nullptr) {
+        // Inside ForBlock, print to ForBlock oss_body directly.
+        // Only supported case:
+        // for(y...)
+        //   for(x...)
+        //     for(c...)
+        //       if(c==0) read_stream()
+        //       ....
+        //       if(c==2) write_stream()
+        current_fb->print("when " + print_expr(op->condition) + " :\n");
+        current_fb->open_scope();
+        if (contain_read_stream(op->then_case)||
+            contain_write_stream(op->then_case)) {
+            print(op->then_case);
+        } else {
+            internal_error << "General IfThenElse is not supported.\n"; // TODO
+        }
+        current_fb->close_scope("");
     } else {
-        internal_error << "IfThenElse is not supported yet.\n"; // TODO
+        internal_error << "General IfThenElse is not supported.\n"; // TODO
     }
     id = "0";
 }

@@ -66,6 +66,7 @@ public:
 
         blur_x.compute_at(output, xo);
         blur_x.linebuffer();
+        in.fifo_depth(hw_output, 256*2+5+5);
 
         hw_output.accelerate({in}, xi, xo);
         hw_output.compute_at(output, xo);

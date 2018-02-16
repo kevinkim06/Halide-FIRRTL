@@ -22,11 +22,8 @@ enum ComponentType
     Linebuffer,
     Fifo,
     Dispatcher,
-    Forcontrol,
     Forblock,
     Slaveif,
-    Computestage,
-    Wrstream,
     All
 };
 
@@ -164,7 +161,7 @@ class IO : public Component
 public:
     IO(const string &name, ComponentType t) : Component(name) {type = t;}
     void setStoreExtents(vector<int> e) { store_extents = e;}
-    vector<int> setStoreExtents(void) { return store_extents;}
+    vector<int> getStoreExtents(void) { return store_extents;}
     bool isInputIO() { return type == ComponentType::Input;}
 
 protected:
@@ -189,18 +186,9 @@ protected:
 class ForBlock : public Component
 {
 public:
-    ForBlock(const string &name) : Component(name) {type = ComponentType::Forblock;}
+    ForBlock(const string &name) : Component(name) {type = ComponentType::Forblock; indent = 0;}
 
-protected:
-
-};
-
-class ForControl : public Component
-{
-public:
-    ForControl(const string &name) : Component(name) {type = ComponentType::Forcontrol;}
-
-    ForControl() {type = ComponentType::Forcontrol;}
+    ForBlock() {type = ComponentType::Forblock;}
     void addVar(string p) {scan_vars.push_back(p);}
     void addStencilVar(string p) {stencil_vars.push_back(p);}
     void addMin(int i)    {mins.push_back(i);}
@@ -209,37 +197,18 @@ public:
     vector<string> getStencilVars() {return stencil_vars;}
     vector<int>    getMins(void) {return mins;}
     vector<int>    getMaxs(void) {return maxs;}
+    void print(string s);
+    vector<string> print_body();
+    void open_scope();
+    void close_scope(const std::string &);
 
 protected:
     vector<string> scan_vars;
     vector<string> stencil_vars;
     vector<int> mins;
     vector<int> maxs;
-};
-
-class ComputeStage : public Component
-{
-public:
-    ComputeStage(const string &name) : Component(name) {type = ComponentType::Computestage;}
-
-protected:
-};
-
-class WrStream : public Component
-{
-public:
-    WrStream(const string &name) : Component(name) {type = ComponentType::Wrstream;}
-    void addVar(string p) {scan_vars.push_back(p);}
-    void addStencilVar(string p) {stencil_vars.push_back(p);}
-    void addMax(int i)    {maxs.push_back(i);}
-    vector<string> getVars() {return scan_vars;}
-    vector<string> getStencilVars() {return stencil_vars;}
-    vector<int>    getMaxs(void) {return maxs;}
-
-protected:
-    vector<string> scan_vars;
-    vector<string> stencil_vars;
-    vector<int> maxs;
+    int indent;
+    ostringstream oss_body;
 };
 
 }

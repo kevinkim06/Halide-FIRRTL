@@ -28,11 +28,12 @@ int main(int argc, char **argv) {
 
     for (int y = 0; y < in.height(); y++) {
         for (int x = 0; x < in.width(); x++) {
-	    in(x, y) = (uint8_t) x+y;   //rand();
+            in(x, y) = (uint8_t) rand();
         }
     }
 
     printf("start.\n");
+    save_txt(in, "in.txt");
 
     pipeline_native(in, out_native);
 
@@ -43,15 +44,16 @@ int main(int argc, char **argv) {
     printf("finish running HLS code\n");
 
     save_png(out_native, "out.png");
+    save_txt(out_native, "out.txt");
 
     bool success = true;
     for (int y = 0; y < out_hls.height(); y++) {
         for (int x = 0; x < out_hls.width(); x++) {
-	    if (out_native(x, y) != out_hls(x, y)) {
+            if (out_native(x, y) != out_hls(x, y)) {
                 printf("Mismatch found: out_native(%d, %d) = %d, "
                        "out_hls(%d, %d) = %d\n",
-	    	   x, y, out_native(x, y),
-	    	   x, y, out_hls(x, y));
+                   x, y, out_native(x, y),
+                   x, y, out_hls(x, y));
                 success = false;
             }
         }
