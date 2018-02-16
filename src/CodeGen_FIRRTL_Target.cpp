@@ -1618,16 +1618,18 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer2D(string name, int 
         int imgL1 = L[1]/inEl[1];
         int nBit_imgL0 = (int)std::ceil(std::log2((float)imgL0));
         int nBit_imgL1 = (int)std::ceil(std::log2((float)imgL1));
-        int nBit_bufL1 = std::max(1, (int)std::ceil(std::log2((float)bufL1)));
+        int nBit_bufL1 = (int)std::ceil(std::log2((float)bufL1));
         int nBit_inEl1 = (int)std::ceil(std::log2((float)inEl[1]));
         int nBit_outEl1 = (int)std::ceil(std::log2((float)outEl[1]));
 
         do_indent(); stream << "io.in.ready <= UInt<1>(0)\n";
         do_indent(); stream << "reg col : UInt<" << nBit_imgL0 << ">, clock with : (reset => (reset, UInt<" << nBit_imgL0 << ">(0)))\n";
         do_indent(); stream << "reg row : UInt<" << nBit_imgL1 << ">, clock with : (reset => (reset, UInt<" << nBit_imgL1 << ">(0)))\n";
-        do_indent(); stream << "reg rowModBufL1 : UInt<" << nBit_bufL1 << ">, clock with : (reset => (reset, UInt<" << nBit_bufL1 << ">(0)))\n";
         for(int i=0; i<bufL1; i++) {
             do_indent(); stream << "cmem buffer" << i << " : {value : " << inS << "}[" << bufL0 << "]\n";
+        }
+        if (bufL1!=0) {
+            do_indent(); stream << "reg writeIdx1 : UInt<" << nBit_bufL1 << ">, clock with : (reset => (reset, UInt<" << nBit_bufL1 << ">(0)))\n";
         }
         do_indent(); stream << "wire slice : {value : " << l1S << "}\n";
         do_indent(); stream << "slice is invalid\n";
@@ -1650,16 +1652,29 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer2D(string name, int 
         do_indent(); stream << "io.in.ready <= UInt<1>(1)\n";
         do_indent(); stream << "when io.in.valid :\n";
         do_indent(); stream << "  when geq(row, UInt<" << nBit_imgL1 << ">(" << bufL1 << ")) :\n";
-        do_indent(); stream << "    node inSliceL1m = mul(rowModBufL1, UInt<" << nBit_inEl1+1 << ">(" << inEl[1] << "))\n";
         for(int l1=0; l1<bufL1; l1++) {
             do_indent(); stream << "    infer mport buffer" << l1 << "_rd = buffer" << l1 << "[col], clock\n";
+            do_indent(); stream << "    node inSliceL1s_buffer" << l1 << " = tail(asUInt(sub(UInt<" << nBit_bufL1+1 << ">(" << bufL1+l1 << "), writeIdx1)), 1)\n";
+            do_indent(); stream << "    wire inSliceL1_buffer" << l1 << " : UInt<" << nBit_outEl1 << ">\n";
+            do_indent(); stream << "    inSliceL1_buffer" << l1 << " is invalid\n";
+            do_indent(); stream << "    when geq(inSliceL1s_buffer" << l1 << ", UInt<" << nBit_bufL1+1 << ">(" << bufL1 << ")) :\n";
+            do_indent(); stream << "      inSliceL1_buffer" << l1 << " <= tail(asUInt(sub(inSliceL1s_buffer" << l1 << ", UInt<" << nBit_bufL1+1 << ">(" << bufL1 << "))), 1)\n";
+            do_indent(); stream << "      skip\n";
+            do_indent(); stream << "    else :\n";
+            do_indent(); stream << "      inSliceL1_buffer" << l1 << " <= inSliceL1s_buffer" << l1 << "\n";
+            do_indent(); stream << "      skip\n";
+            if (inEl[1]==1) {
+                do_indent(); stream << "    node inSliceL1m_buffer" << l1 << " = inSliceL1_buffer" << l1 << "\n";
+            } else {
+                do_indent(); stream << "    node inSliceL1m_buffer" << l1 << " = mul(inSliceL1_buffer" << l1 << ", UInt<" << nBit_inEl1+1 << ">(" << inEl[1] << "))\n";
+            }
             for (int i3=0; i3<inEl[3]; i3++) {
             for (int i2=0; i2<inEl[2]; i2++) {
             for (int i1=0; i1<inEl[1]; i1++) {
                 if (inEl[1]==1) {
-                    do_indent(); stream << "    node inSliceL1ma" << i3 << i2 << i1 << "_buffer" << l1 << " = inSliceL1m\n";
+                    do_indent(); stream << "    node inSliceL1ma" << i3 << i2 << i1 << "_buffer" << l1 << " = bits(inSliceL1m_buffer" << l1 << ", " << nBit_outEl1-1 << ", 0)\n";
                 } else {
-                    do_indent(); stream << "    node inSliceL1ma" << i3 << i2 << i1 << "_buffer" << l1 << " = tail(add(inSliceL1m, UInt<" << nBit_outEl1 << ">(" << i1 << ")), 1)\n";
+                    do_indent(); stream << "    node inSliceL1ma" << i3 << i2 << i1 << "_buffer" << l1 << " = bits(tail(add(inSliceL1m_buffer" << l1 << ", UInt<" << nBit_outEl1 << ">(" << i1 << ")), 1), " << nBit_outEl1-1 << ", 0)\n";
                 }
                 for (int i0=0; i0<inEl[0]; i0++) {
                     do_indent(); stream << "    slice.value[" << i3 << "][" << i2 << "][inSliceL1ma" << i3 << i2 << i1 << "_buffer" << l1 << "][" << i0 << "] <=  buffer" << l1 << "_rd.value[" << i3 << "][" << i2 << "][" << i1 << "][" << i0 << "]\n";
@@ -1707,14 +1722,14 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer2D(string name, int 
         do_indent(); stream << "        row <= UInt<1>(0)\n";
         do_indent(); stream << "        skip\n";
         if (bufL1!=0) {
-            do_indent(); stream << "      node rowModBufL1_is_max = eq(rowModBufL1, UInt<" << nBit_bufL1 << ">(" << bufL1-1 << "))\n";
-            do_indent(); stream << "      node rowModBufL1_inc = tail(add(rowModBufL1, UInt<1>(1)), 1)\n";
-            do_indent(); stream << "      rowModBufL1 <= rowModBufL1_inc\n";
+            do_indent(); stream << "      node writeIdx_is_max = eq(writeIdx1, UInt<" << nBit_bufL1 << ">(" << bufL1-1 << "))\n";
+            do_indent(); stream << "      node writeIdx_inc = tail(add(writeIdx1, UInt<1>(1)), 1)\n";
+            do_indent(); stream << "      writeIdx1 <= writeIdx_inc\n";
         }
         do_indent(); stream << "      skip\n";
 
         for(int l1=0; l1<bufL1; l1++) {
-            do_indent(); stream << "    when eq(UInt<" << nBit_bufL1 << ">(" << l1 << "), rowModBufL1) :\n";
+            do_indent(); stream << "    when eq(UInt<" << nBit_bufL1 << ">(" << l1 << "), writeIdx1) :\n";
             do_indent(); stream << "      infer mport buffer" << l1 << "_wr = buffer" << l1 << "[col], clock\n";
             for (int i3=0; i3<inEl[3]; i3++) {
             for (int i2=0; i2<inEl[2]; i2++) {
