@@ -35,8 +35,13 @@ string Component::print_stencil_type(FIRRTL_Type stencil_type) {
     case FIRRTL_Type::StencilContainerType::Stencil :
     case FIRRTL_Type::StencilContainerType::Stream :
         oss << print_type(stencil_type.elemType);
-        for(const auto &range : stencil_type.bounds) {
-            oss << "_" << range.extent;
+        for(size_t i = 0 ; i < stencil_type.bounds.size() ; i++ ) {
+            if (i==0) {
+                oss << "_";
+            } else {
+                oss << "x";
+            }
+            oss << stencil_type.bounds[i].extent;
         }
         break;
     case FIRRTL_Type::StencilContainerType::AxiStream :
