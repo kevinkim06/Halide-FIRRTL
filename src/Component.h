@@ -161,7 +161,7 @@ class IO : public Component
 public:
     IO(const string &name, ComponentType t) : Component(name) {type = t;}
     void setStoreExtents(vector<int> e) { store_extents = e;}
-    vector<int> setStoreExtents(void) { return store_extents;}
+    vector<int> getStoreExtents(void) { return store_extents;}
     bool isInputIO() { return type == ComponentType::Input;}
 
 protected:
