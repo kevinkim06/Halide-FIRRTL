@@ -268,6 +268,8 @@ const std::map<std::string, Target::Feature> feature_name_map = {
     {"trace_loads", Target::TraceLoads},
     {"trace_stores", Target::TraceStores},
     {"trace_realizations", Target::TraceRealizations},
+    //----- Unselecting perfect nested loop -----//
+    {"no_perfect_nested_loop", Target::NoPerfectNestedLoop},
 };
 
 bool lookup_feature(const std::string &tok, Target::Feature &result) {
