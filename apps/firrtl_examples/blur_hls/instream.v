@@ -45,7 +45,7 @@ initial begin
         if (stall==1) // 1/2 prob: stall
         begin
             valid_i = 0;
-            stall2 = 1+$random&7;
+            stall2 = 1+$random&31;
             while(stall2>0)
             begin
                 stall2 = stall2 - 1;
