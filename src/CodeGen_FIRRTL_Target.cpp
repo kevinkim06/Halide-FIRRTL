@@ -946,13 +946,18 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
     do_indent(); stream << ";  Type=" << in_stencil.elemType << "\n";
     do_indent(); stream << ";  Bits=" << in_stencil.elemType.bits() << "\n";
     do_indent(); stream << ";  Stencil=";
+    vector<int> stencil_size;
     for(const auto &range : in_stencil.bounds) {
         stream << "[" << range.extent << "]";
+        const IntImm *int_imm = range.extent.as<IntImm>();
+        stencil_size.push_back(int_imm->value);
     }
     stream << "\n";
     do_indent(); stream << ";  Image Size=";
     vector<int> store_extents = c->getStoreExtents();
+    vector<int> se_nBits;
     for(const auto &s : store_extents) {
+        se_nBits.push_back(std::max((int)std::ceil(std::log2((float)s)), 1));
         stream << "[" << s << "]";
     }
     stream << "\n";
@@ -963,191 +968,140 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
     map<string, FIRRTL_Type> istreams = c->getInputs();
     string istr;
     for(auto &i : istreams) {
-        istr = i.first; // TODO assert only one stream
+        istr = i.first;
     }
     map<string, FIRRTL_Type> ostreams = c->getOutputs();
     string ostr;
     for(auto &i : ostreams) {
-        ostr = i.first; // TODO assert only one stream
+        ostr = i.first;
     }
 
     // Body of IO
     int store_extents_size = store_extents.size();
     for(int i = 0; i < store_extents_size; i++) {
-        do_indent(); stream << "wire VAR_" << i << "_MIN : UInt<16>\n";
-        do_indent(); stream << "wire VAR_" << i << "_MAX : UInt<16>\n";
+        do_indent(); stream << "reg counter_" << i << " : UInt<" << se_nBits[i] << ">, clock with : (reset => (reset, UInt<" << se_nBits[i] << ">(0)))\n";
     }
-    do_indent(); stream << "wire ST_IDLE  : UInt<2>\n";
-    do_indent(); stream << "wire ST_RUN0  : UInt<2>\n";
-    do_indent(); stream << "wire ST_DONE  : UInt<2>\n";
-    stream << "\n";
+
+    do_indent();
+    stream << "reg valid_d1 : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
+    do_indent(); stream << "reg " << ostr << "_value : " << print_stencil_type(in_stencil) << ", clock\n";
+    do_indent(); stream << "reg started : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
+    do_indent(); stream << "reg state : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
+
+
+    if (c->isInputIO()) {
+        do_indent(); stream << ostr << ".value is invalid\n";
+        do_indent(); stream << ostr << ".valid is invalid\n";
+    } else {
+        do_indent(); stream << ostr << ".TDATA is invalid\n";
+        do_indent(); stream << ostr << ".TVALID is invalid\n";
+    }
+    do_indent(); stream << "done_out is invalid\n";
+
+
+    if (c->isInputIO()) {
+        do_indent(); stream << istr << ".TREADY <= UInt<1>(0)\n";
+        do_indent(); stream << ostr << ".value <= " << ostr << "_value\n";
+        do_indent(); stream << ostr << ".valid <= UInt<1>(0)\n";
+    } else {
+        do_indent(); stream << istr << ".ready <= UInt<1>(0)\n";
+        do_indent(); stream << ostr << ".TDATA <= " << ostr << "_value\n";
+        do_indent(); stream << ostr << ".TVALID <= UInt<1>(0)\n";
+        do_indent(); stream << ostr << ".TLAST <= UInt<1>(0)\n";
+    }
+
+    do_indent(); stream << "done_out <= UInt<1>(0)\n";
+    do_indent(); stream << "when start_in :\n";
+    open_scope();
+    do_indent(); stream << "started <= UInt<1>(1)\n";
     for(int i = 0; i < store_extents_size; i++) {
-        do_indent(); stream << "VAR_" << i << "_MIN <= UInt<16>(0)\n";
-        do_indent(); stream << "VAR_" << i << "_MAX <= UInt<16>(" << store_extents[i]-1 << ")\n";
+        do_indent(); stream << "counter_" << i << " <= UInt<" << se_nBits[i] << ">(0)\n";
     }
-    stream << "\n";
+    do_indent(); stream << "valid_d1 <= UInt<1>(0)\n";
+    do_indent(); stream << "state <= UInt<1>(0)\n";
+    close_scope("");
+    do_indent(); stream << "else when done_out :\n";
+    open_scope();
+    do_indent(); stream << "started <= UInt<1>(0)\n";
+    close_scope("");
 
-    do_indent(); stream << "ST_IDLE   <= UInt<2>(0)\n";
-    do_indent(); stream << "ST_RUN0   <= UInt<2>(1)\n";
-    do_indent(); stream << "ST_DONE   <= UInt<2>(3)\n";
-    stream << "\n";
-    do_indent(); stream << "reg  r_cs_fsm : UInt<2>, clock with : (reset => (reset, UInt<2>(0)))\n";
-    do_indent(); stream << "wire w_ns_fsm : UInt<2>\n";
-    do_indent(); stream << "wire w_done : UInt<1>\n";
-    do_indent(); stream << "reg  r_done : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
-
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "reg  r_counter_var_" << i << " : UInt<16>, clock with : (reset => (reset, UInt<16>(0)))\n";
-    }
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_max : UInt<1>\n";
-    }
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_min : UInt<1>\n";
-    }
-    do_indent(); stream << "wire w_counter_all_max : UInt<1>\n";
-    do_indent(); stream << "reg  r_data_out : " << print_stencil_type(in_stencil) << ", clock\n";
-    do_indent(); stream << "reg  r_valid_out : UInt<1>, clock with : (reset => (reset, UInt<1>(0)))\n";
-    stream << "\n";
-
-    do_indent(); stream << "wire ready_in_i : UInt<1>\n";
-    do_indent(); stream << "wire valid_in_i : UInt<1>\n";
-    do_indent(); stream << "wire data_in_i : " << print_stencil_type(in_stencil) << "\n";
-    do_indent(); stream << "wire ready_out_i : UInt<1>\n";
-    stream << "\n";
+    do_indent(); stream << "when started :\n";
+    open_scope();
 
     if (c->isInputIO()) {
-        do_indent(); stream << "ready_in_i <= " << ostr << ".ready\n";
-        do_indent(); stream << "valid_in_i <= " << istr << ".TVALID\n";
-        do_indent(); stream << "data_in_i <= " << istr << ".TDATA\n";
+        do_indent(); stream << "when " << ostr << ".ready :\n";
     } else {
-        do_indent(); stream << "ready_in_i <= " << ostr << ".TREADY\n";
-        do_indent(); stream << "valid_in_i <= " << istr << ".valid\n";
-        do_indent(); stream << "data_in_i <= " << istr << ".value\n";
+        do_indent(); stream << "when " << ostr << ".TREADY :\n";
     }
+    open_scope();
 
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_max <= eq(r_counter_var_" << i << ", VAR_" << i << "_MAX)\n";
-    }
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_min <= eq(r_counter_var_" << i << ", VAR_" << i << "_MIN)\n";
-    }
-    do_indent(); stream << "w_counter_all_max <= ";
-    for(int i = 0 ; i < store_extents_size; i++) {
-        if (i == (store_extents_size-1))// last term
-            stream << "w_counter_var_" << i << "_max";
-        else
-            stream << "and(w_counter_var_" << i << "_max, ";
-    }
-    for(int i = 0 ; i < store_extents_size-1 ; i++) {
-        stream << ")";
-    }
-    stream << "\n";
-    stream << "\n";
-
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_reset : UInt<1>\n";
-    }
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "wire w_counter_var_" << i << "_inc : UInt<1>\n";
-    }
-    do_indent(); stream << "wire ready_valid : UInt<1>\n";
-    stream << "\n";
-
-    do_indent(); stream << "ready_valid <= and(or(not(r_valid_out), ready_in_i), and(valid_in_i, eq(r_cs_fsm, ST_RUN0)))\n";
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "w_counter_var_" << i << "_reset <= or(start_in, and(ready_valid, ";
-
-        for(int j = 0 ; j <= i; j++) {
-            if (j == i) { // last term
-                stream << "w_counter_var_" << j << "_max";
-            } else {
-                stream << "and(w_counter_var_" << j << "_max, ";
-            }
-        }
-        for(int j = 0 ; j <= i ; j++) { // closing AND
-            stream << ")";
-        }
-        stream << ")\n"; // closing OR
-    }
-    stream << "\n";
-
-    for(int i = 0 ; i < store_extents_size; i++) {
-        if (i==0) {
-            do_indent(); stream << "w_counter_var_0_inc <= ready_valid\n";
-        } else {
-            do_indent(); stream << "w_counter_var_" << i << "_inc <= and(ready_valid, ";
-            for(int j = 0 ; j <= i; j++) {
-                if (j == i) { // last term
-                    stream << "not(w_counter_var_" << j << "_max)";
-                } else {
-                    stream << "and(w_counter_var_" << j << "_max, ";
-                }
-            }
-            for(int j = 0 ; j < i ; j++) { // closing AND
-                stream << ")";
-            }
-            stream << ")\n"; // closing OR
-        }
-    }
-    stream << "\n";
-
-    // FSM
-    do_indent(); stream << "r_cs_fsm <= w_ns_fsm\n";
-    do_indent(); stream << "w_ns_fsm <= r_cs_fsm\n";
-    do_indent(); stream << "when eq(r_cs_fsm, ST_IDLE) :\n";
-    do_indent(); stream << "  when start_in :\n";
-    do_indent(); stream << "    w_ns_fsm <= ST_RUN0\n";
-    do_indent(); stream << "else when eq(r_cs_fsm, ST_RUN0) :\n";
-    if (c->isInputIO()) {
-        do_indent(); stream << "  when or(w_done, and(" << istr << ".TLAST, ready_valid)) :\n";
-    } else {
-        do_indent(); stream << "  when w_done :\n";
-    }
-    do_indent(); stream << "    w_ns_fsm <= ST_DONE\n";
-    do_indent(); stream << "else when eq(r_cs_fsm, ST_DONE) :\n";
-    do_indent(); stream << "  w_ns_fsm <= ST_IDLE\n";
-    stream << "\n";
-
-    do_indent(); stream << "w_done <= and(w_counter_all_max, ready_valid)\n";
-    stream << "\n";
-
-    for(int i = 0 ; i < store_extents_size; i++) {
-        do_indent(); stream << "when w_counter_var_" << i << "_reset :\n";
-        do_indent(); stream << "  r_counter_var_" << i << " <= VAR_" << i << "_MIN\n";
-        do_indent(); stream << "else when w_counter_var_" << i << "_inc :\n";
-        do_indent(); stream << "  r_counter_var_" << i << " <= add(r_counter_var_" << i << ", UInt<16>(1))\n";
-        stream << "\n";
-    }
-
-    do_indent(); stream << "ready_out_i <= or(not(r_valid_out), ready_in_i)\n";
-    stream << "\n";
-
-    do_indent(); stream << "when ready_valid :\n";
-    do_indent(); stream << "  r_data_out <= data_in_i\n";
-    do_indent(); stream << "  r_done     <= w_done\n";
-    do_indent(); stream << "else :\n";
-    do_indent(); stream << "  r_done     <= UInt<1>(0)\n";
-    stream << "\n";
-
-    do_indent(); stream << "when ready_valid :\n";
-    do_indent(); stream << "  r_valid_out <= UInt<1>(1)\n";
-    do_indent(); stream << "else when ready_in_i :\n";
-    do_indent(); stream << "  r_valid_out <= UInt<1>(0)\n";
-    stream << "\n";
+    // State 0
+    do_indent(); stream << "when eq(state, UInt<1>(0)) :\n";
+    open_scope();
 
     if (c->isInputIO()) {
-        do_indent(); stream << istr << ".TREADY <= ready_out_i\n";
-        do_indent(); stream << ostr << ".valid <= r_valid_out\n";
-        do_indent(); stream << ostr << ".value <= r_data_out\n";
+        do_indent(); stream << "when " << istr << ".TVALID :\n";
     } else {
-        do_indent(); stream << istr << ".ready <= ready_out_i\n";
-        do_indent(); stream << ostr << ".TVALID <= r_valid_out\n";
-        do_indent(); stream << ostr << ".TDATA <= r_data_out\n";
-        do_indent(); stream << ostr << ".TLAST <= r_done\n";
+        do_indent(); stream << "when " << istr << ".valid :\n";
+    }
+    open_scope();
+
+    for(int i = 0 ; i < store_extents_size ; i++) {
+        do_indent(); stream << "node counter_" << i << "_is_max = eq(counter_" << i << ", UInt<" << se_nBits[i] << ">(" << store_extents[i]-stencil_size[i] << "))\n";
+        // Note: stencil_size can be bigger than 1. For input IO, store bounds are only availabel in 
+        // testbench side through "subimage_to_stream()", so it should be inferred from image size and stencil size.
+        do_indent(); stream << "node counter_" << i << "_inc_c = add(counter_" << i << ", UInt<" << se_nBits[i] << ">(" << stencil_size[i] << "))\n";
+        do_indent(); stream << "node counter_" << i << "_inc = tail(counter_" << i << "_inc_c, 1)\n";
+        do_indent(); stream << "counter_" << i << " <= counter_" << i << "_inc\n";
+        do_indent(); stream << "when counter_" << i << "_is_max :\n";
+        open_scope();
+        do_indent(); stream << "counter_" << i << " <= UInt<" << se_nBits[i] << ">(0)\n";
+    }
+    do_indent(); stream << "state <= UInt<1>(1)\n";
+
+    for(int i = store_extents_size-1 ; i >= 0 ; i--) { // reverse order
+        close_scope("counter_" + std::to_string(i));
     }
 
-    do_indent(); stream << "done_out <= eq(r_cs_fsm, ST_DONE)\n";
+    do_indent(); stream << "valid_d1 <= UInt<1>(1)\n";
+    if (c->isInputIO()) {
+        do_indent(); stream << ostr << "_value <= " << istr << ".TDATA\n";
+        do_indent(); stream << istr << ".TREADY <= UInt<1>(1)\n"; // pop from previous FIFO
+        do_indent(); stream << ostr << ".valid <= valid_d1\n";
+    } else {
+        do_indent(); stream << ostr << "_value <= " << istr << ".value\n";
+        do_indent(); stream << istr << ".ready <= UInt<1>(1)\n"; // pop from previous FIFO
+        do_indent(); stream << ostr << ".TVALID <= valid_d1\n";
+    }
+
+    if (c->isInputIO()) {
+        close_scope(istr + ".TVALID");
+    } else {
+        close_scope(istr + ".valid");
+    }
+
+    close_scope("state0");
+
+    // State 1
+    do_indent(); stream << "when eq(state, UInt<1>(1)) :\n";
+    open_scope();
+    if (c->isInputIO()) {
+        do_indent(); stream << ostr << ".valid <= valid_d1\n"; // push to next FIFO (when ready)
+    } else {
+        do_indent(); stream << ostr << ".TVALID <= valid_d1\n"; // push to next FIFO (when ready)
+        do_indent(); stream << ostr << ".TLAST <= UInt<1>(1)\n"; // push to next FIFO (when ready)
+    }
+    do_indent(); stream << "state <= UInt<1>(0)\n";
+    do_indent(); stream << "done_out <= UInt<1>(1)\n";
+    close_scope("state1");
+
+    if (c->isInputIO()) {
+        close_scope(ostr + ".ready");
+    } else {
+        close_scope(ostr + ".TREADY");
+    }
+
+    close_scope("started");
 
     close_scope(" end of " + c->getModuleName());
     stream << "\n";
@@ -1192,13 +1146,15 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
     int depth = std::stoi(c->getDepth());
     do_indent(); stream << ";  Depth=" << depth << "\n";
     stream << "\n";
+    int nBit = std::max((int)std::ceil(std::log2((float)depth+1)), 1);
+    int level_nBit = (int)std::ceil(std::log2((float)depth+2));
 
     // generate body
     s.type = FIRRTL_Type::StencilContainerType::Stencil;
-    do_indent(); stream << "reg  mem : " << print_stencil_type(s) << "[" << depth+1 << "], clock\n";
-    do_indent(); stream << "reg  r_wr_ptr : UInt<16>, clock with : (reset => (reset, UInt<16>(0)))\n";
-    do_indent(); stream << "reg  r_rd_ptr : UInt<16>, clock with : (reset => (reset, UInt<16>(0)))\n";
-    do_indent(); stream << "reg  r_level : UInt<16>, clock with : (reset => (reset, UInt<16>(0)))\n";
+    do_indent(); stream << "cmem  mem : {value : " << print_stencil_type(s) << "}[" << depth+1 << "]\n";
+    do_indent(); stream << "reg  r_wr_ptr : UInt<" << nBit << ">, clock with : (reset => (reset, UInt<" << nBit << ">(0)))\n";
+    do_indent(); stream << "reg  r_rd_ptr : UInt<" << nBit << ">, clock with : (reset => (reset, UInt<" << nBit << ">(0)))\n";
+    do_indent(); stream << "reg  r_level : UInt<" << level_nBit << ">, clock with : (reset => (reset, UInt<" << level_nBit << ">(0)))\n";
     do_indent(); stream << "wire w_push : UInt<1>\n";
     do_indent(); stream << "wire w_pop : UInt<1>\n";
     do_indent(); stream << "reg  r_empty : UInt<1>, clock with : (reset => (reset, UInt<1>(1)))\n";
@@ -1212,36 +1168,40 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
     stream << "\n";
 
     do_indent(); stream << "when w_push :\n";
-    do_indent(); stream << "  when lt(r_wr_ptr, UInt<16>(" << depth << ")) :\n";
-    do_indent(); stream << "    r_wr_ptr <= add(r_wr_ptr, UInt<16>(1))\n";
-    do_indent(); stream << "  else :\n";
-    do_indent(); stream << "    r_wr_ptr <= UInt<16>(0)\n";
+    do_indent(); stream << "  node r_wr_ptr_is_max = eq(r_wr_ptr, UInt<" << nBit << ">(" << depth << "))\n";
+    do_indent(); stream << "  node r_wr_ptr_inc_c = add(r_wr_ptr, UInt<1>(1))\n";
+    do_indent(); stream << "  node r_wr_ptr_inc = tail(r_wr_ptr_inc_c, 1)\n";
+    do_indent(); stream << "  r_wr_ptr <= r_wr_ptr_inc\n";
+    do_indent(); stream << "  when r_wr_ptr_is_max :\n";
+    do_indent(); stream << "    r_wr_ptr <= UInt<" << nBit << ">(0)\n";
     stream << "\n";
 
     do_indent(); stream << "when w_pop :\n";
-    do_indent(); stream << "  when lt(r_rd_ptr, UInt<16>(" << depth << ")) :\n";
-    do_indent(); stream << "    r_rd_ptr <= add(r_rd_ptr, UInt<16>(1))\n";
-    do_indent(); stream << "  else :\n";
-    do_indent(); stream << "    r_rd_ptr <= UInt<16>(0)\n";
+    do_indent(); stream << "  node r_rd_ptr_is_max = eq(r_rd_ptr, UInt<" << nBit << ">(" << depth << "))\n";
+    do_indent(); stream << "  node r_rd_ptr_inc_c = add(r_rd_ptr, UInt<1>(1))\n";
+    do_indent(); stream << "  node r_rd_ptr_inc = tail(r_rd_ptr_inc_c, 1)\n";
+    do_indent(); stream << "  r_rd_ptr <= r_rd_ptr_inc\n";
+    do_indent(); stream << "  when r_rd_ptr_is_max :\n";
+    do_indent(); stream << "    r_rd_ptr <= UInt<" << nBit << ">(0)\n";
     stream << "\n";
 
     do_indent(); stream << "when and(w_push, not(w_pop)) :\n";
-    do_indent(); stream << "  r_level <= add(r_level, UInt<16>(1))\n";
+    do_indent(); stream << "  r_level <= tail(add(r_level, UInt<1>(1)), 1)\n";
     do_indent(); stream << "else when and(not(w_push), w_pop) :\n";
-    do_indent(); stream << "  r_level <= asUInt(sub(r_level, UInt<16>(1)))\n";
+    do_indent(); stream << "  r_level <= tail(asUInt(sub(r_level, UInt<1>(1))), 1)\n";
     stream << "\n";
 
     do_indent(); stream << "when and(w_push, not(w_pop)) :\n";
     do_indent(); stream << "  r_empty <= UInt<1>(0)\n";
     do_indent(); stream << "else when and(not(w_push), w_pop) :\n";
-    do_indent(); stream << "  when eq(r_level, UInt<16>(1)) :\n";
+    do_indent(); stream << "  when eq(r_level, UInt<" << nBit << ">(1)) :\n";
     do_indent(); stream << "    r_empty <= UInt<1>(1)\n";
     do_indent(); stream << "  else :\n";
     do_indent(); stream << "    r_empty <= UInt<1>(0)\n";
     stream << "\n";
 
     do_indent(); stream << "when and(w_push, not(w_pop)) :\n";
-    do_indent(); stream << "  when eq(r_level, UInt<16>(" << depth << ")) :\n";
+    do_indent(); stream << "  when eq(r_level, UInt<" << nBit << ">(" << depth << ")) :\n";
     do_indent(); stream << "    r_full <= UInt<1>(1)\n";
     do_indent(); stream << "  else :\n";
     do_indent(); stream << "    r_full <= UInt<1>(0)\n";
@@ -1250,11 +1210,13 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
     stream << "\n";
 
     do_indent(); stream << "when w_push :\n";
-    do_indent(); stream << "  mem[r_wr_ptr] <= data_in.value\n";
+    do_indent(); stream << "  infer mport mem_wr = mem[r_wr_ptr], clock\n";
+    do_indent(); stream << "  mem_wr.value <= data_in.value\n";
     stream << "\n";
 
     do_indent(); stream << "when w_pop :\n";
-    do_indent(); stream << "  r_data_out <= mem[r_rd_ptr]\n";
+    do_indent(); stream << "  infer mport mem_rd = mem[r_rd_ptr], clock\n";
+    do_indent(); stream << "  r_data_out <= mem_rd.value\n";
     stream << "\n";
 
     do_indent(); stream << "data_out.value <= r_data_out\n";
@@ -1977,12 +1939,6 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forblock(ForBlock *c)
     }
     stream << "\n";
 
-    do_indent(); stream << ";  stencil var=";
-    for(auto &p : c->getStencilVars()) {
-        stream << p << " ";
-    }
-    stream << "\n";
-
     do_indent(); stream << ";  min=";
     for(auto &p : c->getMins()) {
         stream << p << " ";
@@ -1994,6 +1950,25 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forblock(ForBlock *c)
         stream << p << " ";
     }
     stream << "\n";
+
+    do_indent(); stream << ";  stencil var=";
+    for(auto &p : c->getStencilVars()) {
+        stream << p << " ";
+    }
+    stream << "\n";
+
+    do_indent(); stream << ";  stencil min=";
+    for(auto &p : c->getStencilMins()) {
+        stream << p << " ";
+    }
+    stream << "\n";
+
+    do_indent(); stream << ";  stencil max=";
+    for(auto &p : c->getStencilMaxs()) {
+        stream << p << " ";
+    }
+    stream << "\n";
+
     stream << "\n";
 
     // Body of ForBlock
@@ -2073,8 +2048,8 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forblock(ForBlock *c)
     do_indent(); stream << "done_out <= UInt<1>(0)\n";
     do_indent(); stream << "run_step <= UInt<1>(0)\n";
     do_indent(); stream << "when start_in :\n";
-    do_indent(); stream << "  started <= UInt<1>(1)\n";
     open_scope();
+    do_indent(); stream << "started <= UInt<1>(1)\n";
     for(unsigned i = 0 ; i < vars.size() ; i++) {
         do_indent();
         stream << vars[i] << " <= UInt<" << maxs_nBits[i] << ">(" << mins[i] << ")\n";
