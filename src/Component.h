@@ -186,17 +186,23 @@ protected:
 class ForBlock : public Component
 {
 public:
-    ForBlock(const string &name) : Component(name) {type = ComponentType::Forblock; indent = 0;}
+    ForBlock(const string &name) : Component(name) {type = ComponentType::Forblock; indent = 0; pipeline_depth = 1;}
 
     ForBlock() {type = ComponentType::Forblock;}
     void addVar(string p) {scan_vars.push_back(p);}
-    void addStencilVar(string p) {stencil_vars.push_back(p);}
     void addMin(int i)    {mins.push_back(i);}
     void addMax(int i)    {maxs.push_back(i);}
+    void addStencilVar(string p) {stencil_vars.push_back(p);}
+    void addStencilMax(int p) {stencil_maxs.push_back(p);}
+    void addStencilMin(int p) {stencil_mins.push_back(p);}
+    void setPipelineDepth(int p) {pipeline_depth = p;}
     vector<string> getVars() {return scan_vars;}
-    vector<string> getStencilVars() {return stencil_vars;}
     vector<int>    getMins(void) {return mins;}
     vector<int>    getMaxs(void) {return maxs;}
+    vector<string> getStencilVars() {return stencil_vars;}
+    vector<int> getStencilMaxs() {return stencil_maxs;}
+    vector<int> getStencilMins() {return stencil_mins;}
+    int getPipelineDepth() {return pipeline_depth;}
     void print(string s);
     vector<string> print_body();
     void open_scope();
@@ -204,10 +210,13 @@ public:
 
 protected:
     vector<string> scan_vars;
-    vector<string> stencil_vars;
     vector<int> mins;
     vector<int> maxs;
+    vector<string> stencil_vars;
+    vector<int> stencil_mins;
+    vector<int> stencil_maxs;
     int indent;
+    int pipeline_depth;
     ostringstream oss_body;
 };
 
