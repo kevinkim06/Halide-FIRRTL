@@ -5,8 +5,6 @@ module outstream(
     input       reset,
     input       start_in,
     input[7:0]  data_in0,
-    input[7:0]  data_in1,
-    input[7:0]  data_in2,
     input       valid,
     output reg  ready,
     input       stop_in
@@ -17,14 +15,10 @@ integer seed, i;
 integer stall;
 integer stall2;
 integer fp0;
-integer fp1;
-integer fp2;
 reg     ready_i;
 initial begin
     ready_i = 0;
     fp0 = $fopen("out_rtl0.txt");
-    fp1 = $fopen("out_rtl1.txt");
-    fp2 = $fopen("out_rtl2.txt");
     @(posedge start_in);
     @(negedge start_in);
 
@@ -55,8 +49,6 @@ initial begin
     ready_i = 0;
     wait(stop_in);
     $fclose(fp0);
-    $fclose(fp1);
-    $fclose(fp2);
 end 
 
 always@(*)
@@ -73,12 +65,8 @@ begin
     begin
         cnt = cnt + 1;
         $fwrite(fp0, "%d ", data_in0);
-        $fwrite(fp1, "%d ", data_in1);
-        $fwrite(fp2, "%d ", data_in2);
         if ((cnt%256)==0) begin
             $fwrite(fp0, "\n");
-            $fwrite(fp1, "\n");
-            $fwrite(fp2, "\n");
         end
     end
 end
