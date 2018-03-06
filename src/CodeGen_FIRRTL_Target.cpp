@@ -2149,9 +2149,9 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forblock(ForBlock *c)
 
     // State 1
     if (!no_state1) {
-        do_indent(); stream << "run_step <= UInt<1>(1)\n"; // move pipeline one step forward (when ready&valid)
         do_indent(); stream << "when eq(state, UInt<2>(1)) :\n";
         open_scope();
+        do_indent(); stream << "run_step <= UInt<1>(1)\n"; // move pipeline one step forward (when ready&valid)
 
         for(int i = stencil_vars.size()-1 ; i >= 0 ; i--) { // reverse order
             do_indent(); stream << "node " << stencil_vars[i] << "_is_max = eq(" << stencil_vars[i] << ", UInt<" << stencil_nBits[i] << ">(" << stencil_maxs[i] << "))\n";
@@ -2704,16 +2704,14 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
         Expr b = op->args[1];
         string sa = print_expr(a);
         string sb = print_expr(b);
-        if (((op->type).bits())>16) { // FIRRTL has limitation this should be <20.
-            print_assignment(op->type,  "dshl(" + sa + ", bits(" + sb + ", 18, 0))");
-        } else {
-            print_assignment(op->type,  "dshl(" + sa + ", " + sb + ")");
-        }
+        Type t = UInt(16); // Workaround for the limit: dshl(e, n), n should be 18(or 19) bit or less. 16 might be enough.
+        Expr cast_b = cast(t, b);
+        visit_binop(op->type, a, cast_b, "dshl");
     } else if (op->is_intrinsic(Call::shift_right)) {
         internal_assert(op->args.size() == 2);
         Expr a = op->args[0];
         Expr b = op->args[1];
-        Type t = UInt((op->type).bits());
+        Type t = UInt(16); // Workaround for the limit: dshr(e, n), n should be 18(or 19) bit or less. 16 might be enough.
         Expr cast_b = cast(t, b);
         visit_binop(op->type, a, cast_b, "dshr");
     } else if (op->is_intrinsic(Call::lerp)) {
