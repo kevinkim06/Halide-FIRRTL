@@ -105,6 +105,7 @@ protected:
             bool is_stencil; // scalar or stencil (array)
             int bitwidth; // TODO for packing.
             int range; // bitwidth * extents[0] * extents[1] * ... *extents[3] / 8
+            int offset; // address offset in byte
             std::vector<int> extents;
         };
 

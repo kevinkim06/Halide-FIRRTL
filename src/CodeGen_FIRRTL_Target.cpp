@@ -460,7 +460,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::add_kernel(Stmt stmt,
         } else { // constant scalar or stencil
             string s = print_name(args[i].name);
             sif->addOutPort(s, stype);
-            sif->addReg("r_" + s, stype); // TODO offset address?
+            sif->addReg("r_" + s, stype);
             top->addWire("wire_" + s, stype);
             top->addConnect("wire_" + s, sif->getInstanceName() + "." + s);
         }
@@ -603,43 +603,41 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
     // Offset address assignment
     int offset = 0x40; // Base of config registers
     std::map<int, string> complete_address_map;
-    std::map<int, Reg_Type> address_map; // map of vector (name, size)
+    std::map<string, Reg_Type> address_map; // map of vector (name, size)
     for(auto &p : c->getRegs()) {
         FIRRTL_Type s = p.second;
         Reg_Type r;
-        r.name = p.first;
-        std::vector<int> extents;
         if (s.type == FIRRTL_Type::StencilContainerType::Stencil) { // TODO: pack it in 32-bit word
-            // TODO: assert s.bounds.size() <= 4
-            // TODO: assert s.bounds.size() >= 1
-            extents.push_back(1);
-            extents.push_back(1);
-            extents.push_back(1);
-            extents.push_back(1);
+            internal_assert(s.bounds.size() <= 4);
+            internal_assert(s.bounds.size() >= 1);
+            r.extents.push_back(1);
+            r.extents.push_back(1);
+            r.extents.push_back(1);
+            r.extents.push_back(1);
             int bsize = s.bounds.size();
             r.range = 1;
             for(int i = 0 ; i < bsize ; i++) {
                 const IntImm *e = s.bounds[i].extent.as<IntImm>();
-                extents[i] = e->value;
-                r.extents.push_back(e->value);
+                r.extents[i] = e->value;
                 r.range *= e->value;
             }
             r.is_stencil = true;
             r.bitwidth = 32; //s.elemType.bits(); // TODO for packing
             //TODO for packing... r.range *= r.bitwidth;
             r.range *= 4; // range in byte
-            address_map[offset] = r;
+            r.offset = offset;
+            address_map[p.first] = r;
             string regidx0, regidx1, regidx2, regidx3;
-            for(int i3 = 0; i3 < extents[3]; i3++) {
+            for(int i3 = 0; i3 < r.extents[3]; i3++) {
                 if (bsize == 4) regidx3 = "[" + std::to_string(i3) + "]";
                 else regidx3 = "";
-                for(int i2 = 0; i2 < extents[2]; i2++) {
+                for(int i2 = 0; i2 < r.extents[2]; i2++) {
                     if (bsize >= 3) regidx2 = "[" + std::to_string(i2) + "]";
                     else regidx2 = "";
-                    for(int i1 = 0; i1 < extents[1]; i1++) {
+                    for(int i1 = 0; i1 < r.extents[1]; i1++) {
                         if (bsize >= 2) regidx1 = "[" + std::to_string(i1) + "]";
                         else regidx1 = "";
-                        for(int i0 = 0; i0 < extents[0]; i0++) {
+                        for(int i0 = 0; i0 < r.extents[0]; i0++) {
                             regidx0 = "[" + std::to_string(i0) + "]";
                             complete_address_map[offset] = p.first+regidx3+regidx2+regidx1+regidx0; // reverse-order
                             offset += 4; // TODO: packing
@@ -651,8 +649,9 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
             r.is_stencil = false;
             r.bitwidth = 32;//s.elemType.bits(); // TODO for packing
             r.range = 4; // range in byte
+            r.offset = offset;
             complete_address_map[offset] = p.first;
-            address_map[offset] = r;
+            address_map[p.first] = r;
             offset += 4;
         }
     }
@@ -722,17 +721,16 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
     }
     for(auto &p : c->getRegs()) {
         FIRRTL_Type s = p.second;
-        if (s.type != FIRRTL_Type::StencilContainerType::Stencil) { // TODO: not supported in FIRRTL?
+        Reg_Type r = address_map[p.first];
+        if (s.type != FIRRTL_Type::StencilContainerType::Stencil) {
             do_indent();
             stream << "reg  " << p.first << " : " << print_stencil_type(p.second) << ", clock";
             stream << " with : (reset => (reset, " << print_type(s.elemType) << "(0)))\n";
         } else {
             do_indent();
-            stream << "reg  " << p.first << " : " << print_stencil_type(s) << ", clock\n";
-            for(size_t i = 0 ; i < s.bounds.size() ; i++) { // index of each array TODO is 16-bit enough?
-                do_indent(); stream << "wire w_" << p.first << "_rd_idx" << i << " : UInt<16>\n";
-                do_indent(); stream << "wire w_" << p.first << "_wr_idx" << i << " : UInt<16>\n";
-            }
+            stream << "cmem " << p.first << " : {value : " << print_type(s.elemType) << "}[" << (r.range>>2) << "]\n";
+            do_indent(); stream << "wire w_" << p.first << "_rd_idx : UInt<16>\n";
+            do_indent(); stream << "wire w_" << p.first << "_wr_idx : UInt<16>\n";
         }
     }
     stream << "\n";
@@ -776,31 +774,11 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
     for(auto &p : address_map) {
         Reg_Type r = p.second;
         if (r.is_stencil) {
-            if (r.extents.size()==1) {
-                do_indent();
-                stream << "w_" << r.name << "_rd_idx0" << " <= shr(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\"))), 2)\n";
-                do_indent();
-                stream << "w_" << r.name << "_wr_idx0" << " <= shr(asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << p.first << "\"))), 2)\n";
-                stream << std::dec;
-            } else {
-                int stride = r.extents[0] * 4;
-                do_indent();
-                stream << "w_" << r.name << "_rd_idx0" << " <= shr(rem(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
-                stream << "UInt(\"h" << std::hex << stride << "\")), 2)\n";
-                do_indent();
-                stream << "w_" << r.name << "_wr_idx0" << " <= shr(rem(asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
-                stream << "UInt(\"h" << std::hex << stride << "\")), 2)\n";
-                for(size_t i = 1 ; i < r.extents.size() ; i++) {
-                    do_indent();
-                    stream << "w_" << r.name << "_rd_idx" << i << " <= div(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
-                    stream << "UInt(\"h" << std::hex << stride << "\"))\n";
-                    do_indent();
-                    stream << "w_" << r.name << "_wr_idx" << i << " <= div(asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << p.first << "\"))), ";
-                    stream << "UInt(\"h" << std::hex << stride << "\"))\n";
-                    stride *= r.extents[i];
-                }
-                stream << std::dec; // TODO: do we need this?
-            }
+            do_indent();
+            stream << "w_" << p.first << "_rd_idx" << " <= shr(asUInt(sub(r_ar_addr, UInt(\"h" << std::hex << r.offset << "\"))), 2)\n";
+            do_indent();
+            stream << "w_" << p.first << "_wr_idx" << " <= shr(asUInt(sub(r_aw_addr, UInt(\"h" << std::hex << r.offset << "\"))), 2)\n";
+            stream << std::dec;
         }
     }
     stream << "\n";
@@ -817,20 +795,18 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
         Reg_Type r = p.second;
         if (r.is_stencil) {
             do_indent();
-            stream << "  else when and(geq(r_ar_addr, UInt<32>(\"h" << std::hex << p.first << "\")), ";
-            stream << "lt(r_ar_addr, UInt<32>(\"h" << (p.first + r.range) << "\"))) :\n";
-            do_indent();
-            stream << "    r_rd_data <= asUInt(" << r.name;
-            for(int i = r.extents.size()-1 ; i >= 0 ; i--) {
-                stream << "[w_" << r.name << "_rd_idx" << i << "]";
-            }
-            stream << ")\n";
+            stream << "  else when and(geq(r_ar_addr, UInt<32>(\"h" << std::hex << r.offset << "\")), ";
+            stream << "lt(r_ar_addr, UInt<32>(\"h" << (r.offset + r.range) << "\"))) :\n";
             stream << std::dec;
+            do_indent();
+            stream << "    infer mport " << p.first << "_rd = " << p.first << "[w_" << p.first << "_rd_idx], clock\n";
+            do_indent();
+            stream << "    r_rd_data <= asUInt(" << p.first << "_rd.value)\n";
         } else {
             do_indent();
-            stream << "  else when eq(r_ar_addr, UInt<32>(\"h" << std::hex << p.first << "\")) :\n";
+            stream << "  else when eq(r_ar_addr, UInt<32>(\"h" << std::hex << r.offset << "\")) :\n";
             do_indent();
-            stream << "    r_rd_data <= asUInt(" << r.name << ")\n";
+            stream << "    r_rd_data <= asUInt(" << p.first << ")\n";
             stream << std::dec;
         }
     }
@@ -876,22 +852,19 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
     do_indent(); stream << "  r_done <= UInt<1>(1)\n";
     stream << "\n";
 
-    for(auto &p : address_map) { // print in order of address
+    for(auto &p : address_map) {
         Reg_Type r = p.second;
-        FIRRTL_Type s = c->getReg(r.name);
+        FIRRTL_Type s = c->getReg(p.first);
         if (r.is_stencil) {
             do_indent(); stream << "when eq(r_aw_cs_fsm, ST_AW_ADDR) :\n";
-            do_indent(); stream << "  when and(geq(r_aw_addr, UInt<32>(\"h" << std::hex << p.first << "\")), ";
-            stream << "lt(r_aw_addr, UInt<32>(\"h" << std::hex << (p.first + r.range) << "\"))) :\n";
-            do_indent(); stream << "    " << r.name;
-            for(int i = r.extents.size()-1 ; i >= 0 ; i--) { // reverse order
-                stream << "[w_" << r.name << "_wr_idx" << i << "]";
-            }
-            stream << " <= as" << print_base_type(s.elemType) << "(WDATA)\n";
+            do_indent(); stream << "  when and(geq(r_aw_addr, UInt<32>(\"h" << std::hex << r.offset << "\")), ";
+            stream << "lt(r_aw_addr, UInt<32>(\"h" << std::hex << (r.offset + r.range) << "\"))) :\n";
+            do_indent(); stream << "    infer mport " << p.first << "_wr = " << p.first << "[w_" << p.first << "_wr_idx], clock\n";
+            do_indent(); stream << "    " << p.first << "_wr.value <= as" << print_base_type(s.elemType) << "(WDATA)\n";
         } else {
             do_indent(); stream << "when eq(r_aw_cs_fsm, ST_AW_ADDR) :\n";
-            do_indent(); stream << "  when eq(r_aw_addr, UInt<32>(\"h" << std::hex << p.first << "\")) :\n";
-            do_indent(); stream << "    " << r.name << " <= as" << print_base_type(s.elemType) << "(WDATA)\n";
+            do_indent(); stream << "  when eq(r_aw_addr, UInt<32>(\"h" << std::hex << r.offset << "\")) :\n";
+            do_indent(); stream << "    " << p.first << " <= as" << print_base_type(s.elemType) << "(WDATA)\n";
         }
         stream << "\n";
     }
@@ -900,8 +873,40 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
 
     for(auto &p : c->getRegs()) {
         string s = p.first;
+        Reg_Type r = address_map[p.first];
         s.replace(0,2,""); // remove "r_"
-        do_indent(); stream << s << " <= " << p.first << "\n";
+        if (r.is_stencil) { // TODO: better way?
+            string regidx0, regidx1, regidx2, regidx3;
+            int idx = 0;
+            int bsize = 1;
+            if (r.extents[3] != 1) bsize = 4;
+            else if (r.extents[2] != 1) bsize = 3;
+            else if (r.extents[1] != 1) bsize = 2;
+            for(int i3 = 0; i3 < r.extents[3]; i3++) {
+                if (bsize == 4) regidx3 = "[" + std::to_string(i3) + "]";
+                else regidx3 = "";
+                for(int i2 = 0; i2 < r.extents[2]; i2++) {
+                    if (bsize >= 3) regidx2 = "[" + std::to_string(i2) + "]";
+                    else regidx2 = "";
+                    for(int i1 = 0; i1 < r.extents[1]; i1++) {
+                        if (bsize >= 2) regidx1 = "[" + std::to_string(i1) + "]";
+                        else regidx1 = "";
+                        for(int i0 = 0; i0 < r.extents[0]; i0++) {
+                            regidx0 = "[" + std::to_string(i0) + "]";
+                            string rd_idx = std::to_string(i3) + "_" + std::to_string(i2) + "_" + std::to_string(i1) + "_" + std::to_string(i0);
+                            do_indent();
+                            stream << "infer mport " << p.first << "_" << rd_idx << "_rd = ";
+                            stream << p.first << "[UInt<16>(" << idx << ")], clock\n";
+                            do_indent();
+                            stream << s+regidx3+regidx2+regidx1+regidx0 << " <= " << p.first+"_"+rd_idx+"_rd.value\n";
+                            idx++;
+                        }
+                    }
+                }
+            }
+        } else {
+            do_indent(); stream << s << " <= " << p.first << "\n";
+        }
     }
 
     close_scope(" end of " + c->getModuleName());
