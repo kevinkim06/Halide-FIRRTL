@@ -298,18 +298,16 @@ string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment(Type t, const std
 
     id = unique_name('_');
 
-    if (current_fb!=nullptr) { // Inside ForBlock, print to ForBlock oss_body directly.
-        //current_fb->addWire(id, wire_type);
-        //current_fb->addConnect(id, rhs);
-        current_fb->print("node " + id + " = " + rhs + "\n");
-    } else {
-        if (cached == cache.end()) {
+    if (cached == cache.end()) {
+        if (current_fb!=nullptr) { // Inside ForBlock, print to ForBlock oss_body directly.
+            current_fb->print("node " + id + " = " + rhs + "\n");
+        } else {
             top->addWire(id, wire_type);
             top->addConnect(id, rhs);
-            cache[rhs] = id;
-        } else {
-            id = cached->second;
         }
+        cache[rhs] = id;
+    } else {
+        id = cached->second;
     }
     return id;
 }
@@ -602,7 +600,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
 
     // Offset address assignment
     int offset = 0x40; // Base of config registers
-    std::map<int, string> complete_address_map;
+    std::map<int, string> complete_address_map; // Just for Register Map table printing.
     std::map<string, Reg_Type> address_map; // map of vector (name, size)
     for(auto &p : c->getRegs()) {
         FIRRTL_Type s = p.second;
@@ -629,17 +627,16 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
             address_map[p.first] = r;
             string regidx0, regidx1, regidx2, regidx3;
             for(int i3 = 0; i3 < r.extents[3]; i3++) {
-                if (bsize == 4) regidx3 = "[" + std::to_string(i3) + "]";
-                else regidx3 = "";
+                regidx3 = "_" + std::to_string(i3);
                 for(int i2 = 0; i2 < r.extents[2]; i2++) {
-                    if (bsize >= 3) regidx2 = "[" + std::to_string(i2) + "]";
-                    else regidx2 = "";
+                    regidx2 = "_" + std::to_string(i2);
                     for(int i1 = 0; i1 < r.extents[1]; i1++) {
-                        if (bsize >= 2) regidx1 = "[" + std::to_string(i1) + "]";
-                        else regidx1 = "";
+                        regidx1 = "_" + std::to_string(i1);
                         for(int i0 = 0; i0 < r.extents[0]; i0++) {
-                            regidx0 = "[" + std::to_string(i0) + "]";
-                            complete_address_map[offset] = p.first+regidx3+regidx2+regidx1+regidx0; // reverse-order
+                            regidx0 = "_" + std::to_string(i0);
+                            string n = p.first;
+                            n.replace(0,2,""); // remove "r_"
+                            complete_address_map[offset] = n+regidx3+regidx2+regidx1+regidx0; // reverse-order
                             offset += 4; // TODO: packing
                         }
                     }
@@ -650,14 +647,16 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
             r.bitwidth = 32;//s.elemType.bits(); // TODO for packing
             r.range = 4; // range in byte
             r.offset = offset;
-            complete_address_map[offset] = p.first;
+            string n = p.first;
+            n.replace(0,2,""); // remove "r_"
+            complete_address_map[offset] = n;
             address_map[p.first] = r;
             offset += 4;
         }
     }
 
     // Body
-    do_indent(); stream << ";------------------ Register Map -----------------\n";
+    do_indent(); stream << ";------------------ Start of Register Map -----------------\n";
     do_indent(); stream << "; 0x00000000 : CTRL\n";
     do_indent(); stream << ";              [0]: Start (Write 1 to start, auto cleared)\n";
     do_indent(); stream << ";              [1]: Done (Set to 1 when all block are done. Write 1 to clear)\n";
@@ -677,6 +676,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
         do_indent();
         stream << "; 0x" << std::hex << std::setw(8) << std::setfill('0') << p.first << " : " << p.second << "\n";
     }
+    do_indent(); stream << ";------------------ End of Register Map -----------------\n";
     stream << std::dec;
     stream << "\n";
 
@@ -2463,14 +2463,14 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_dispatch(Dispatch *c)
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::open_scope()
 {
-    cache.clear();
+    //cache.clear();
     indent += 2;
 }
 
 void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::close_scope(const std::string &comment)
 {
     do_indent(); stream << "skip ; " << comment << "\n";
-    cache.clear();
+    //cache.clear();
     indent -= 2;
 }
 
@@ -3137,7 +3137,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
     int id_min = ((op->min).as<IntImm>())->value;
     int id_extent = ((op->extent).as<IntImm>())->value;
 
-    if (for_scanvar_list.empty()) { // only one ForBlock per For-loop group.
+    if (for_scanvar_list.empty()) { // First for of for-loop group. Only one ForBlock per For-loop group.
 
         // Create ForBlock component
         ForBlock *fb = new ForBlock("FB_" + print_name(producename));
@@ -3192,7 +3192,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
     }
 
     if (!contain_for_loop(op->body)) { // inner most loop
-        // TODO: Do we need to keep this?
+        cache.clear();
     }
 
     print(op->body);
@@ -3200,6 +3200,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
     for_scanvar_list.pop_back();
 
     if (for_scanvar_list.empty()) {
+        cache.clear();
         current_fb = nullptr;
     }
 }
