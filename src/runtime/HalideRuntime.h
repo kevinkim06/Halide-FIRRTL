@@ -948,7 +948,8 @@ typedef enum halide_target_feature_t {
     halide_target_feature_zynq = 50, ///< Enable Xilinx Zynq runtime.
     //----- HLS Modification Ends -------//
     halide_target_feature_no_perfect_nested_loop = 51, ///< Disable Perfect Nested Loop
-    halide_target_feature_end = 52 ///< A sentinel. Every target is considered to have this feature, and setting this feature does nothing.
+    halide_target_feature_dump_io = 52, ///< Dump IO for RTL Simulation used with compile_to_hls()
+    halide_target_feature_end = 53 ///< A sentinel. Every target is considered to have this feature, and setting this feature does nothing.
 } halide_target_feature_t;
 
 /** This function is called internally by Halide in some situations to determine

@@ -92,6 +92,35 @@ void CodeGen_HLS_Testbench::visit(const ProducerConsumer *op) {
         string ip_name = unique_name("hls_target");
         cg_target.add_kernel(hw_body, ip_name, args);
 
+        // Instrument to capture all paramter inputs.
+        if (target.has_feature(Target::DumpIO)) {
+            do_indent();
+            stream << "FILE *_fp_dump;\n";
+            do_indent();
+            stream << "_fp_dump = fopen(\"param.dat\", \"w\");\n";
+            do_indent();
+            stream << "if(_fp_dump==NULL) {\n";
+            do_indent();
+            stream << "    printf(\"Can't open param.dat.\\n\");\n";
+            do_indent();
+            stream << "}\n";
+            for(size_t i = 0; i < args.size(); i++) {
+                string a = print_name(args[i].name);
+                a.replace(0,1,""); // remove leading "_" TODO is this enough?
+                if (!ends_with(a, "_stream")) { // Input/Output stream(s) will be dumped separately.
+                    if (ends_with(a, "_tap_stencil")) {
+                        do_indent();
+                        stream << "stencil_to_file(_fp_dump, \"" << a << "\", " << print_name(args[i].name) << ");\n";
+                    } else {
+                        do_indent();
+                        stream << "fprintf(_fp_dump, \"" << a << " %d\\n\", " << print_name(args[i].name) << ");\n";
+                    }
+                }
+            }
+            do_indent();
+            stream << "fclose(_fp_dump);\n";
+        }
+
         // emits the target function call
         do_indent();
         stream << ip_name << "("; // avoid starting with '_'
@@ -133,6 +162,33 @@ void CodeGen_HLS_Testbench::visit(const Call *op) {
 
         do_indent();
         stream << rhs.str();
+
+        // Instrument to capture stream input and output.
+        if (target.has_feature(Target::DumpIO)) {
+            string filename = a1;
+            filename.replace(0,1,""); // remove leading "_" TODO is this enough?
+            do_indent();
+            stream << "{\n";
+            do_indent();
+            stream << "    FILE *_fp_dump_" << a1 << ";\n";
+            do_indent();
+            stream << "    _fp_dump_" << a1 << " = fopen(\"" << filename << ".dat\", \"w\");\n";
+            do_indent();
+            stream << "    if(_fp_dump_" << a1 << "==NULL) {\n";
+            do_indent();
+            stream << "        printf(\"Can't open " << filename << ".dat.\\n\");\n";
+            do_indent();
+            stream << "    }\n";
+            do_indent();
+            stream << "    subimage_to_file(_fp_dump_" << a1 << ", ";
+            stream << a1 << ", " << a2 << ", " << a3;
+            for (size_t i = 4; i < op->args.size(); i++) {
+                stream << ", " << print_expr(op->args[i]);
+            }
+            stream <<");\n";
+            do_indent();
+            stream << "}\n";
+        }
 
         id = "0"; // skip evaluation
     } else if (op->name == "buffer_to_stencil") {

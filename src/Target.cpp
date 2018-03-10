@@ -270,6 +270,8 @@ const std::map<std::string, Target::Feature> feature_name_map = {
     {"trace_realizations", Target::TraceRealizations},
     //----- Unselecting perfect nested loop -----//
     {"no_perfect_nested_loop", Target::NoPerfectNestedLoop},
+    //----- Dump IO for RTL Simulation, used with compile_to_hls()-----//
+    {"dump_io", Target::DumpIO},
 };
 
 bool lookup_feature(const std::string &tok, Target::Feature &result) {
