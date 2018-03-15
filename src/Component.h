@@ -6,7 +6,6 @@
 #include <vector>
 #include <regex>
 #include "CodeGen_FIRRTL_Base.h"
-//#include "CodeGen_FIRRTL_Target.h"
 
 namespace Halide {
 

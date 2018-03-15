@@ -126,7 +126,7 @@ protected:
 void FIRRTL_For_Closure::visit(const Call *op)
 {
     // Ignore read_stream and write_stream because they're taken care of 
-    // by CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(Call).
+    // by CodeGen_FIRRTL_Target::visit(Call).
     if((op->name != "read_stream") &&
        (op->name != "write_stream")) {
         Closure::visit(op);
@@ -150,56 +150,27 @@ vector<string> FIRRTL_For_Closure::arguments(void) {
     return res;
 }
 
-CodeGen_FIRRTL_Target::CodeGen_FIRRTL_Target(const string &name, Target target)
-    : target_name(name),
-      srcfir(src_stream,
-           target.with_feature(Target::CPlusPlusMangling)) { }
-
-CodeGen_FIRRTL_Target::~CodeGen_FIRRTL_Target() {
-    // write the header and the source streams into files
-    string src_name = target_name + ".fir";
-    ofstream src_file(src_name.c_str());
-
-    src_file << src_stream.str() << endl;
-    src_file.close();
-}
-
-void CodeGen_FIRRTL_Target::init_module() {
-    debug(1) << "CodeGen_FIRRTL_Target::init_module\n";
-
-    // wipe the internal streams
-    src_stream.str("");
-    src_stream.clear();
-
+CodeGen_FIRRTL_Target::CodeGen_FIRRTL_Target(std::ostream &s, Target t, const std::string &ip_name)
+    : IRPrinter(s), id("$$ BAD ID $$"), target(t), target_name(ip_name) {
+    indent = 0;
     // initialize the source file
-    src_stream << ";Generated FIRRTL\n";
-    src_stream << ";Target name: " << target_name << "\n";
-
-}
-
-void CodeGen_FIRRTL_Target::add_kernel(Stmt s,
-                                    const string &name,
-                                    const vector<FIRRTL_Argument> &args) {
-    debug(1) << "CodeGen_FIRRTL_Target::add_kernel " << name << "\n";
-
-    srcfir.add_kernel(s, name, args);
-}
-
-void CodeGen_FIRRTL_Target::dump() {
-    std::cerr << src_stream.str() << std::endl;
+    stream << ";Generated FIRRTL\n";
+    stream << ";Target name: " << target_name << "\n";
 }
 
 // Extract root of the name
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::rootName(string name)
+string CodeGen_FIRRTL_Target::rootName(const string &name)
 {
-    std::size_t found = name.find(".");
-    if (found!=std::string::npos)
-        return name.replace(name.begin()+name.find("."),name.end(),"");
-    else
-        return name;
+    ostringstream oss;
+
+    for (size_t i = 0; i < name.size(); i++) {
+        if (name[i]=='.') break;
+        oss << name[i];
+    }
+    return oss.str();
 }
 
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_name(const string &name) {
+string CodeGen_FIRRTL_Target::print_name(const string &name) {
     ostringstream oss;
 
     for (size_t i = 0; i < name.size(); i++) {
@@ -211,17 +182,17 @@ string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_name(const string &name) {
     return oss.str();
 }
 
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_expr(Expr e) {
+string CodeGen_FIRRTL_Target::print_expr(Expr e) {
     id = "$$ BAD ID $$";
     e.accept(this);
     return id;
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_stmt(Stmt s) {
+void CodeGen_FIRRTL_Target::print_stmt(Stmt s) {
     s.accept(this);
 }
 
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_base_type(const Type type) {
+string CodeGen_FIRRTL_Target::print_base_type(const Type type) {
     ostringstream oss;
 
     if (type.is_uint()) oss << "U";
@@ -232,7 +203,7 @@ string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_base_type(const Type type) {
     return oss.str();
 }
 
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_type(const Type type) {
+string CodeGen_FIRRTL_Target::print_type(const Type type) {
     ostringstream oss;
 
     if (type.is_uint()) oss << "U";
@@ -243,7 +214,7 @@ string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_type(const Type type) {
     return oss.str();
 }
 
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_stencil_type(FIRRTL_Type stencil_type) {
+string CodeGen_FIRRTL_Target::print_stencil_type(FIRRTL_Type stencil_type) {
     ostringstream oss;
     // C: Stencil<uint16_t, 1, 1, 1> stencil_var;
     // FIRRTL: UInt<16>[1][1][1] // TODO?
@@ -289,7 +260,7 @@ string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_stencil_type(FIRRTL_Type ste
     return oss.str();
 }
 
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment(Type t, const std::string &rhs) {
+string CodeGen_FIRRTL_Target::print_assignment(Type t, const std::string &rhs) {
 
     map<string, string>::iterator cached = cache.find(rhs);
 
@@ -312,15 +283,14 @@ string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_assignment(Type t, const std
     return id;
 }
 
-string CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_reinterpret(Type type, Expr e) {
+string CodeGen_FIRRTL_Target::print_reinterpret(Type type, Expr e) {
     ostringstream oss;
     oss << "as" << print_base_type(type) << "(" << print_expr(e) << ")"; // TODO
     return oss.str();
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::add_kernel(Stmt stmt,
-                                                       const string &name,
-                                                       const vector<FIRRTL_Argument> &args) {
+void CodeGen_FIRRTL_Target::add_kernel(Stmt stmt,
+                                       const vector<FIRRTL_Argument> &args) {
     // Create Top module
     top = new TopLevel("hls_target");
     sif = new SlaveIf("SlaveIf");
@@ -392,10 +362,12 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::add_kernel(Stmt stmt,
 
     // Process for each input/output.
     for (size_t i = 0; i < args.size(); i++) {
-        FIRRTL_Type stype = conv_FIRRTL_Type(args[i]); // convert FIRRTL_Argument -> FIRRTL_Type
+        FIRRTL_Type stype = args[i].stencil_type;
         debug(3) << "add_kernel: " << args[i].name << " " << print_stencil_type(stype) << "\n";
-        if (args[i].is_stream) { // is stream (all streams are stencil stream).
-            internal_assert(args[i].stencil_type.type == CodeGen_FIRRTL_Base::Stencil_Type::StencilContainerType::AxiStream);
+        bool is_stream = (args[i].stencil_type.type == FIRRTL_Type::StencilContainerType::Stream) ||
+                         (args[i].stencil_type.type == FIRRTL_Type::StencilContainerType::AxiStream);
+        if (is_stream) { // is stream (all streams are stream of stencils).
+            internal_assert(stype.type == FIRRTL_Type::StencilContainerType::AxiStream); // The very input to DUT is expected to be AxiStream for now.
 
             string stream_name = print_name(args[i].name);
             debug(3) << "add_kernel: stream_name " << stream_name << "\n";
@@ -514,7 +486,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::add_kernel(Stmt stmt,
 
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_module(Component *c)
+void CodeGen_FIRRTL_Target::print_module(Component *c)
 {
     do_indent();
     stream << "module " << c->getModuleName() << " :\n";
@@ -574,7 +546,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_module(Component *c)
     stream << "\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
+void CodeGen_FIRRTL_Target::print_slaveif(SlaveIf *c)
 {
     do_indent();
     stream << "module " << c->getModuleName() << " :\n";
@@ -913,7 +885,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_slaveif(SlaveIf *c)
     stream << "\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
+void CodeGen_FIRRTL_Target::print_io(IO *c)
 {
     do_indent();
     stream << "module " << c->getModuleName() << " :\n";
@@ -1112,7 +1084,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_io(IO *c)
     stream << "\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
+void CodeGen_FIRRTL_Target::print_fifo(FIFO *c)
 {
     do_indent();
     stream << "module " << c->getModuleName() << " :\n";
@@ -1242,7 +1214,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_fifo(FIFO *c)
     stream << "\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer(LineBuffer *c)
+void CodeGen_FIRRTL_Target::print_linebuffer(LineBuffer *c)
 {
     do_indent();
     stream << "module " << c->getModuleName() << " :\n";
@@ -1412,7 +1384,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer(LineBuffer *c)
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer1D(string name, int L[4], Type t, int inEl[4], int outEl[4])
+void CodeGen_FIRRTL_Target::print_linebuffer1D(string name, int L[4], Type t, int inEl[4], int outEl[4])
 {
     // TODO: assertion: require(List(inEl.dims).tail == List(outEl.dims).tail, "Except the first dimension, others should match in input and output stencils")
     do_indent();
@@ -1548,7 +1520,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer1D(string name, int 
     stream << "\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer2D(string name, int L[4], Type t, int inEl[4], int outEl[4])
+void CodeGen_FIRRTL_Target::print_linebuffer2D(string name, int L[4], Type t, int inEl[4], int outEl[4])
 {
     // TODO: require(isOutDimDivisibleByIn(1))
     // TODO: require(inEl.dim(2) == outEl.dim(2))
@@ -1752,7 +1724,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer2D(string name, int 
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer3D(string name, int L[4], Type t, int inEl[4], int outEl[4])
+void CodeGen_FIRRTL_Target::print_linebuffer3D(string name, int L[4], Type t, int inEl[4], int outEl[4])
 {
     // TODO: require(....
     // TODO: require(inEl.dim(3) == outEl.dim(3) == 1)
@@ -1915,7 +1887,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_linebuffer3D(string name, int 
 
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forblock(ForBlock *c)
+void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
 {
     do_indent();
     stream << "module " << c->getModuleName() << " :\n";
@@ -2250,7 +2222,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_forblock(ForBlock *c)
     stream << "\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_dispatch(Dispatch *c)
+void CodeGen_FIRRTL_Target::print_dispatch(Dispatch *c)
 {
     do_indent();
     stream << "module " << c->getModuleName() << " :\n";
@@ -2461,51 +2433,48 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::print_dispatch(Dispatch *c)
     stream << "\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::open_scope()
+void CodeGen_FIRRTL_Target::open_scope()
 {
     //cache.clear();
     indent += 2;
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::close_scope(const std::string &comment)
+void CodeGen_FIRRTL_Target::close_scope(const std::string &comment)
 {
     do_indent(); stream << "skip ; " << comment << "\n";
     //cache.clear();
     indent -= 2;
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Variable *op) {
+void CodeGen_FIRRTL_Target::visit(const Variable *op) {
     id = print_name(op->name);
 }
 
-// TODO: do we need?
-//void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Cast *op) {
-//}
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Cast *op)
+void CodeGen_FIRRTL_Target::visit(const Cast *op)
 {
     print_assignment(op->type, "as" + print_base_type(op->type) + "(" + print_expr(op->value) + ")");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit_uniop(Type t, Expr a, const char * op) {
+void CodeGen_FIRRTL_Target::visit_uniop(Type t, Expr a, const char * op) {
     string sa = print_expr(a);
     string sop(op);
     print_assignment(t, sop + "(" + sa + ")");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit_binop(Type t, Expr a, Expr b, const char * op) {
+void CodeGen_FIRRTL_Target::visit_binop(Type t, Expr a, Expr b, const char * op) {
     string sa = print_expr(a);
     string sb = print_expr(b);
     string sop(op);
     print_assignment(t, sop + "(" + sa + ", " + sb + ")");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Add *op) {
+void CodeGen_FIRRTL_Target::visit(const Add *op) {
     ostringstream oss; // TODO: better way?
     oss << "tail(add(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1)";
     print_assignment(op->type, oss.str());
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Sub *op) {
+void CodeGen_FIRRTL_Target::visit(const Sub *op) {
     //visit_binop(op->type, op->a, op->b, "sub");
     ostringstream oss; // TODO: better way?
     Type t;
@@ -2520,7 +2489,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Sub *op) {
     print_assignment(t, oss.str());
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Mul *op) {
+void CodeGen_FIRRTL_Target::visit(const Mul *op) {
     ostringstream oss;
     //visit_binop(op->type, op->a, op->b, "mul");
     int bits = op->type.bits();
@@ -2528,7 +2497,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Mul *op) {
     print_assignment(op->type, oss.str());
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Div *op) {
+void CodeGen_FIRRTL_Target::visit(const Div *op) {
     int bits;
     if (is_const_power_of_two_integer(op->b, &bits)) {
         ostringstream oss;
@@ -2541,7 +2510,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Div *op) {
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Mod *op) {
+void CodeGen_FIRRTL_Target::visit(const Mod *op) {
     int bits;
     if (is_const_power_of_two_integer(op->b, &bits)) {
         ostringstream oss;
@@ -2559,7 +2528,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Mod *op) {
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Max *op)
+void CodeGen_FIRRTL_Target::visit(const Max *op)
 {
     //print_expr(Call::make(op->type, "max", {op->a, op->b}, Call::Extern));
     // FIXME:
@@ -2571,7 +2540,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Max *op)
     print(new_expr);
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Min *op)
+void CodeGen_FIRRTL_Target::visit(const Min *op)
 {
     //print_expr(Call::make(op->type, "min", {op->a, op->b}, Call::Extern));
     // FIXME:
@@ -2583,62 +2552,62 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Min *op)
     print(new_expr);
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const EQ *op)
+void CodeGen_FIRRTL_Target::visit(const EQ *op)
 {
     visit_binop(op->type, op->a, op->b, "eq");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const NE *op)
+void CodeGen_FIRRTL_Target::visit(const NE *op)
 {
     visit_binop(op->type, op->a, op->b, "neq");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const LT *op)
+void CodeGen_FIRRTL_Target::visit(const LT *op)
 {
     visit_binop(op->type, op->a, op->b, "lt");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const LE *op)
+void CodeGen_FIRRTL_Target::visit(const LE *op)
 {
     visit_binop(op->type, op->a, op->b, "leq");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const GT *op)
+void CodeGen_FIRRTL_Target::visit(const GT *op)
 {
     visit_binop(op->type, op->a, op->b, "gt");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const GE *op)
+void CodeGen_FIRRTL_Target::visit(const GE *op)
 {
     visit_binop(op->type, op->a, op->b, "geq");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const And *op)
+void CodeGen_FIRRTL_Target::visit(const And *op)
 {
     Type t = UInt((op->type).bits());
     visit_binop(t, op->a, op->b, "and");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Or *op)
+void CodeGen_FIRRTL_Target::visit(const Or *op)
 {
     Type t = UInt((op->type).bits());
     visit_binop(t, op->a, op->b, "or");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Not *op)
+void CodeGen_FIRRTL_Target::visit(const Not *op)
 {
     print_assignment(op->type, "not(" + print_expr(op->a) + ")");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const IntImm *op) {
+void CodeGen_FIRRTL_Target::visit(const IntImm *op) {
     print_assignment(op->type, print_type(op->type) + "(" + std::to_string(op->value) + ")");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const UIntImm *op) {
+void CodeGen_FIRRTL_Target::visit(const UIntImm *op) {
     print_assignment(op->type, print_type(op->type) + "(" + std::to_string(op->value) + ")");
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const StringImm *op)
+void CodeGen_FIRRTL_Target::visit(const StringImm *op)
 {
     ostringstream oss;
     oss << Expr(op);
@@ -2659,13 +2628,13 @@ static bool isinf(T x)
         x == -std::numeric_limits<T>::infinity());
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const FloatImm *op)
+void CodeGen_FIRRTL_Target::visit(const FloatImm *op)
 {
     // FIXME:
     internal_assert(true) << "Not support floating yet..\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
+void CodeGen_FIRRTL_Target::visit(const Call *op)
 {
     FIRRTL_Type wire_1bit = {FIRRTL_Type::StencilContainerType::Scalar,UInt(1),Region(),0,{}};
     FIRRTL_Type wire_16bit = {FIRRTL_Type::StencilContainerType::Scalar,UInt(16),Region(),0,{}};
@@ -2841,7 +2810,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
 
             interface->addInput(a0, stream_type); // stream
             FIRRTL_Type stype = stream_type;
-            stype.type = FIRRTL_Type::StencilContainerType::AxiStream;
+            stype.type = FIRRTL_Type::StencilContainerType::AxiStream; // stream -> AxiStream
             const Variable *v = op->args[0].as<Variable>();
             string arg_name = print_name(rootName(v->name)); // Use simple name for output.
             interface->addOutput(arg_name, stype); // axi stream
@@ -3063,19 +3032,19 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Call *op)
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Load *op)
+void CodeGen_FIRRTL_Target::visit(const Load *op)
 {
     internal_error << "Load is not supported.\n"; // TODO
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Store *op)
+void CodeGen_FIRRTL_Target::visit(const Store *op)
 {
     internal_error << "Store is not supported.\n"; // TODO
 
     cache.clear();
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Let *op)
+void CodeGen_FIRRTL_Target::visit(const Let *op)
 {
     string id_value = print_expr(op->value);
     Expr new_var = Variable::make(op->value.type(), id_value);
@@ -3083,7 +3052,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Let *op)
     print_expr(body);
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Select *op)
+void CodeGen_FIRRTL_Target::visit(const Select *op)
 {
     ostringstream rhs;
     string type;
@@ -3102,7 +3071,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Select *op)
     print_assignment(op->type, rhs.str());
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const LetStmt *op)
+void CodeGen_FIRRTL_Target::visit(const LetStmt *op)
 {
     stream << "; LetStmt ??\n"; // FIXME
     string id_value = print_expr(op->value);
@@ -3111,12 +3080,12 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const LetStmt *op)
     body.accept(this);
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const AssertStmt *op)
+void CodeGen_FIRRTL_Target::visit(const AssertStmt *op)
 {
     internal_error << "AsserStmt is not supported.\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const ProducerConsumer *op)
+void CodeGen_FIRRTL_Target::visit(const ProducerConsumer *op)
 {
     if (ends_with(op->name, ".stream")) {
         producename = op->name; // Used as a name containing ForBlock name.
@@ -3124,7 +3093,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const ProducerConsumer *op)
     print_stmt(op->body);
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
+void CodeGen_FIRRTL_Target::visit(const For *op)
 {
     internal_assert(op->for_type == ForType::Serial)
         << "Can only emit serial for loops to FIRRTL\n";
@@ -3205,7 +3174,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const For *op)
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Provide *op)
+void CodeGen_FIRRTL_Target::visit(const Provide *op)
 {
     if (ends_with(op->name, ".stencil") ||
         ends_with(op->name, ".stencil_update")) {
@@ -3250,18 +3219,18 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Provide *op)
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Allocate *op)
+void CodeGen_FIRRTL_Target::visit(const Allocate *op)
 {
     stream << "reg " << op->name << ": ____TODO____\n";
     print(op->body);
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Free *op)
+void CodeGen_FIRRTL_Target::visit(const Free *op)
 {
     internal_error << "Free is not supported.\n";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Realize *op)
+void CodeGen_FIRRTL_Target::visit(const Realize *op)
 {
     if (ends_with(op->name, ".stream")) {
         internal_assert(op->types.size() == 1);
@@ -3295,7 +3264,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Realize *op)
     }
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const IfThenElse *op) {
+void CodeGen_FIRRTL_Target::visit(const IfThenElse *op) {
     if (current_fb!=nullptr) {
         // Inside ForBlock, print to ForBlock oss_body then print to stream later.
         // for(y...)
@@ -3320,7 +3289,7 @@ void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const IfThenElse *op) {
     id = "0";
 }
 
-void CodeGen_FIRRTL_Target::CodeGen_FIRRTL::visit(const Evaluate *op)
+void CodeGen_FIRRTL_Target::visit(const Evaluate *op)
 {
     if (is_const(op->value)) return;
     string id = print_expr(op->value);

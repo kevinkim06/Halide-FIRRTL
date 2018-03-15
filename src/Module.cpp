@@ -393,12 +393,10 @@ void Module::compile(const Outputs &output_files) const {
     if (!output_files.firrtl_source_name.empty()) {
         debug(1) << "Module.compile(): firrtl_source_name " << output_files.firrtl_source_name << "\n";
         std::ofstream file(output_files.firrtl_source_name);
-        // TODO: Testbench generation is still C++ for now.
-        CodeGen_C::OutputKind output_kind =
-            target().has_feature(Target::CPlusPlusMangling)
-                ? CodeGen_C::CPlusPlusImplementation
-                : CodeGen_C::CImplementation;
-        CodeGen_FIRRTL_Testbench cg(file, target(), output_kind);
+        std::string ip_name = "hls_target"; // TODO user-given DUT name
+        std::ofstream firrtl_file(ip_name+".fir");
+        // TODO: Testbench is independent. No C/Verilog co-simulation yet.
+        CodeGen_FIRRTL_Testbench cg(file, target(), firrtl_file, ip_name);
         cg.compile(*this);
     }
     if (!output_files.stmt_name.empty()) {

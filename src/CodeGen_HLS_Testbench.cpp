@@ -165,7 +165,7 @@ void CodeGen_HLS_Testbench::visit(const Call *op) {
 
         // Instrument to capture stream input and output.
         if (target.has_feature(Target::DumpIO)) {
-            string filename = a1;
+            string filename = a2;
             filename.replace(0,1,""); // remove leading "_" TODO is this enough?
             do_indent();
             stream << "{\n";

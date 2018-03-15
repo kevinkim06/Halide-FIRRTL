@@ -1,6 +1,8 @@
 `timescale 1ns/1ps
 
-module axi_config(
+module axi_config #(
+    parameter FILENAME = "param_addr.dat"
+) (
     input        clk,
     input        reset,
     output reg [31:0] ARADDR,
@@ -25,12 +27,14 @@ module axi_config(
     output reg stop_sim
 );
 
+integer fp;
+integer ret;
+integer conf_data;
+integer conf_addr;
 reg [31:0] r_data;
 
 localparam ADDR_CTRL = 0;
 localparam ADDR_STATUS = 4;
-localparam ADDR_ENABLE = 'h40;
-localparam ADDR_WEIGHT = 'h44;
 
 task axi_read(
     input [31:0] addr,
@@ -85,29 +89,14 @@ initial begin
     WVALID = 0;
     done = 0;
     stop_sim = 0;
+    fp = $fopen(FILENAME, "r");
     @(start);
-    axi_write (ADDR_ENABLE, 1);
-    axi_write (ADDR_WEIGHT, 1);
-    axi_write (ADDR_WEIGHT+4, 3);
-    axi_write (ADDR_WEIGHT+8, 3);
-    axi_write (ADDR_WEIGHT+12, 15);
-    axi_write (ADDR_WEIGHT+16, 6);
-    axi_write (ADDR_WEIGHT+20, 25);
-    axi_write (ADDR_WEIGHT+24, 3);
-    axi_write (ADDR_WEIGHT+28, 15);
-    axi_write (ADDR_WEIGHT+32, 1);
-    axi_write (ADDR_WEIGHT+36, 3);
-    axi_read (ADDR_ENABLE, r_data);
-    axi_read (ADDR_WEIGHT, r_data);
-    axi_read (ADDR_WEIGHT+4, r_data);
-    axi_read (ADDR_WEIGHT+8, r_data);
-    axi_read (ADDR_WEIGHT+12, r_data);
-    axi_read (ADDR_WEIGHT+16, r_data);
-    axi_read (ADDR_WEIGHT+20, r_data);
-    axi_read (ADDR_WEIGHT+24, r_data);
-    axi_read (ADDR_WEIGHT+28, r_data);
-    axi_read (ADDR_WEIGHT+32, r_data);
-    axi_read (ADDR_WEIGHT+36, r_data);
+    while (!$feof(fp))
+    begin
+        ret = $fscanf(fp, "%x %d\n", conf_addr, conf_data);
+        axi_write (conf_addr, conf_data);
+    end
+    $fclose(fp);
     axi_write (ADDR_CTRL, 1);
     done = 1;
     while (1) begin
