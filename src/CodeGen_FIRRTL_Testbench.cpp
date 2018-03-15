@@ -66,6 +66,7 @@ vector<FIRRTL_Argument> FIRRTL_Closure::arguments(const Scope<FIRRTL_Type> &stre
             FIRRTL_Type stype;
             stype.type = FIRRTL_Type::StencilContainerType::Scalar;
             stype.elemType = i.second;
+            stype.depth = 1;
             // it is a scalar variable
             res.push_back({i.first, is_output, stype});
 
