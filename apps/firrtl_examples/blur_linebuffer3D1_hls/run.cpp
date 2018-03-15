@@ -54,8 +54,6 @@ int main(int argc, char **argv) {
     bool enable = 1;
 
     printf("start.\n");
-    save_txt(in, "in.txt");
-    save_txt(in0, "in0.txt");
 
     pipeline_native(in, enable, weight, out_native);
 
@@ -73,11 +71,6 @@ int main(int argc, char **argv) {
             out_hls0(x, y) = out_hls(x, y, 0);
         }
     }
-
-    save_txt(out_native, "out_nav.txt");
-    save_txt(out_native0, "out_nav0.txt");
-    save_txt(out_hls, "out_hls.txt");
-    save_txt(out_hls0, "out_hls0.txt");
 
     bool success = true;
     for (int y = 0; y < out_hls.height(); y++) {

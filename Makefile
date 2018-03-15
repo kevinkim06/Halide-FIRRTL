@@ -272,7 +272,6 @@ SOURCE_FILES = \
   Closure.cpp \
   CodeGen_ARM.cpp \
   CodeGen_C.cpp \
-  CodeGen_FIRRTL_Base.cpp \
   CodeGen_FIRRTL_Target.cpp \
   CodeGen_FIRRTL_Testbench.cpp \
   CodeGen_GPU_Dev.cpp \

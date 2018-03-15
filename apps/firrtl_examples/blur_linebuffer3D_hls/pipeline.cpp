@@ -92,8 +92,7 @@ public:
         output.compile_to_header("pipeline_zynq.h", args, "pipeline_hls", target);
 
         // FIRRTL generation
-        output.compile_to_firrtl("pipeline_firrtl.cpp", args, "pipeline_firrtl", hls_target);
-    }
+        output.compile_to_firrtl("pipeline_firrtl.v", args, "pipeline_firrtl", hls_target); }
 };
 
 

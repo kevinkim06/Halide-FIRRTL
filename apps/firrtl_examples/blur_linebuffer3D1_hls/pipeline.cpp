@@ -81,6 +81,7 @@ public:
 
         Target hls_target = get_target_from_environment();
         hls_target.set_feature(Target::CPlusPlusMangling);
+        hls_target.set_feature(Target::DumpIO);
         output.compile_to_hls("pipeline_hls.cpp", args, "pipeline_hls", hls_target);
         output.compile_to_header("pipeline_hls.h", args, "pipeline_hls", hls_target);
 
@@ -91,7 +92,7 @@ public:
         output.compile_to_header("pipeline_zynq.h", args, "pipeline_hls", target);
 
         // FIRRTL generation
-        output.compile_to_firrtl("pipeline_firrtl.cpp", args, "pipeline_firrtl", hls_target);
+        output.compile_to_firrtl("pipeline_firrtl.v", args, "pipeline_firrtl", hls_target);
     }
 };
 

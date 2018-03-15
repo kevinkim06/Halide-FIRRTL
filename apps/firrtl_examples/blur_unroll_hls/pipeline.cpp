@@ -7,8 +7,6 @@ Var xo("xo"), xi("xi"), yi("yi"), yo("yo");
 
 class MyPipeline {
     ImageParam input;
-    ImageParam weight;
-    Param<bool> enable;
     Func in;
     Func blur_x, blur_y;
     Func hw_output;
@@ -16,39 +14,26 @@ class MyPipeline {
     std::vector<Argument> args;
 
 public:
-    MyPipeline() : input(UInt(8), 3, "input"),
-                   weight(UInt(8), 2, "weight"),
+    MyPipeline() : input(UInt(8), 2, "input"),
                    in("in"),
                    blur_x("blur_x"),
                    blur_y("blur_y"),
                    hw_output("hw_output"),
                    output("output") {
-        in(c, x, y) = input(c, x, y);
-        blur_x(c, x, y) = (in(c, x, y) * weight(0,0)
-                        +  in(c, x+1, y) * weight(0,1)
-                        +  in(c, x+2, y) * weight(0,2)
-                        +  in(c, x+3, y) * weight(0,3)
-                        +  in(c, x+4, y) * weight(0,4))/5;
-        blur_y(c, x, y) = (blur_x(c, x, y) * weight(1,0)
-                        +  blur_x(c, x, y+1) * weight(1,1)
-                        +  blur_x(c, x, y+2) * weight(1,2))/3;
-        hw_output(c, x, y) = select(enable==true, blur_y(c, x, y), in(c, x, y));
-        output(c, x, y) = hw_output(c, x, y);
-
-        weight.dim(0).set_bounds(0, 2);
-        weight.dim(1).set_bounds(0, 5);
-        weight.dim(0).set_stride(1);
-        weight.dim(1).set_stride(2);
-
-        args = {input, enable, weight};
+        in(x, y) = input(x, y);
+        blur_x(x, y) = (in(x, y) + in(x+1, y) + in(x+2, y))/3;
+        blur_y(x, y) = (blur_x(x, y) + blur_x(x, y+1) + blur_x(x, y+2))/3;
+        hw_output(x, y) = blur_y(x, y);
+        output(x, y) = hw_output(x, y);
+        args = {input};
     }
 
 
     void compile_cpu() {
         std::cout << "\ncompiling cpu code..." << std::endl;
 
-        output.tile(x, y, xo, yo, xi, yi, 256, 256);//.reorder(c, xi, yi, xo, yo);
-        output.bound(x, 0, 256).bound(y, 0, 256).bound(c, 0, 3);
+        output.tile(x, y, xo, yo, xi, yi, 256, 256);
+        output.bound(x, 0, 256).bound(y, 0, 256);
 
         output.compile_to_header("pipeline_native.h", args, "pipeline_native");
         output.compile_to_object("pipeline_native.o", args, "pipeline_native");
@@ -66,18 +51,15 @@ public:
 
         blur_x.compute_at(output, xo);
         blur_x.linebuffer();
-        in.fifo_depth(hw_output, 256*2+5+5+2000);
-        //blur_x.unroll(c);
+        blur_x.unroll(x, 2).unroll(y, 2);
 
         hw_output.accelerate({in}, xi, xo);
         hw_output.compute_at(output, xo);
-        hw_output.tile(x, y, xo, yo, xi, yi, 256, 256);//.reorder(c, xi, yi, xo, yo);
-        hw_output.bound(x, 0, 256).bound(y, 0, 256).bound(c, 0, 3);
-        //hw_output.unroll(c);
+        hw_output.tile(x, y, xo, yo, xi, yi, 256, 256);
+        hw_output.bound(x, 0, 256).bound(y, 0, 256);
 
-        output.tile(x, y, xo, yo, xi, yi, 256, 256);//.reorder(c, xi, yi, xo, yo);
-        output.bound(x, 0, 256).bound(y, 0, 256).bound(c, 0, 3);
-        output.unroll(c);
+        output.tile(x, y, xo, yo, xi, yi, 256, 256);
+        output.bound(x, 0, 256).bound(y, 0, 256);
 
         Target hls_target = get_target_from_environment();
         hls_target.set_feature(Target::CPlusPlusMangling);

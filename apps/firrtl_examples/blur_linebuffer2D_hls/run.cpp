@@ -33,7 +33,6 @@ int main(int argc, char **argv) {
     }
 
     printf("start.\n");
-    save_txt(in, "in.txt");
 
     pipeline_native(in, out_native);
 
@@ -44,8 +43,6 @@ int main(int argc, char **argv) {
     printf("finish running HLS code\n");
 
     save_png(out_native, "out.png");
-    save_txt(out_native, "out_nav.txt");
-    save_txt(out_hls, "out_hls.txt");
 
     bool success = true;
     for (int y = 0; y < out_hls.height(); y++) {

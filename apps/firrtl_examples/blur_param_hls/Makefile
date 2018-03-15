@@ -10,9 +10,10 @@ HLS_LOG = vivado_hls.log
 #### FIRRTL
 FIRRTL_CMD = ${FIRRTL_PATH}/utils/bin/firrtl
 
-.PHONY: all run_hls
-all: out.png
+.PHONY: all run_hls run_verilog
+all: out.png run_verilog
 run_hls: $(HLS_LOG)
+run_verilog: hls_target.v param_addr.dat
 
 
 pipeline: pipeline.cpp
@@ -24,6 +25,9 @@ pipeline_hls.cpp pipeline_native.o pipeline_zynq.cpp pipeline_arm.o pipeline_fir
 hls_target.v: hls_target.fir
 	$(FIRRTL_CMD) -tn hls_target -i $^ -o $@
 
+param_addr.dat: param.dat hls_target.fir
+	../hls_support/reg2addr.py -m hls_target.fir -v param.dat -o $@
+
 run: run.cpp pipeline_hls.cpp hls_target.cpp pipeline_native.o
 	$(CXX) $(CXXFLAGS) -O1 -DNDEBUG $(HLS_CXXFLAGS) -g -Wall -Werror $^ -o $@ $(IMAGE_IO_FLAGS) $(LDFLAGS)
 
@@ -33,8 +37,7 @@ halide_zynq_api_setreg.cpp: hls_prj/solution1/impl/ip/auxiliary.xml
 run_zynq: run.cpp pipeline_zynq.cpp pipeline_arm.o halide_zynq_api_setreg.cpp ../hls_support/HalideRuntimeZynq.cpp
 	$(CROSS_COMPILE)$(CXX) $(CXXFLAGS) $(ZYNQ_CXXFLAGS) -g -Wall -Werror $^ -o $@ $(ZYNQ_LDFLAGS)
 
-
-out.png: run
+out.png param.dat: run
 	./run
 
 $(HLS_LOG) hls_prj/solution1/impl/ip/auxiliary.xml: ../hls_support/run_hls.tcl pipeline_hls.cpp run.cpp
