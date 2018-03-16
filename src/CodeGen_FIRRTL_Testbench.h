@@ -27,7 +27,6 @@ public:
 
 protected:
 
-    // TODO Do we need these?
     /** Emit a declaration. */
     // @{
     virtual void compile(const LoweredFunc &func);
