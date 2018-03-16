@@ -168,7 +168,7 @@ CodeGen_FIRRTL_Testbench::CodeGen_FIRRTL_Testbench(ostream &tb_stream, Target ta
 }
 
 CodeGen_FIRRTL_Testbench::~CodeGen_FIRRTL_Testbench() {
-    stream << "endmodule";
+    stream << "endmodule\n";
 }
 
 void CodeGen_FIRRTL_Testbench::compile(const Module &input)
