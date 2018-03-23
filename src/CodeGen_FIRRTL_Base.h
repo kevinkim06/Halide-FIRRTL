@@ -21,8 +21,9 @@ namespace Internal {
 //  Stencil       constant        array
 //  Stream        stream          array
 //  AxiStream     stream          array
+//  MemRd is for memory rd, consists of value and addr[4]. addr is 1D array of size 4 (supporting up to 4D memory).
 struct FIRRTL_Type {
-    typedef enum {Scalar, Stencil, Stream, AxiStream} StencilContainerType;
+    typedef enum {Scalar, Stencil, Stream, AxiStream, MemRd} StencilContainerType;
     StencilContainerType type;
     Type elemType;  // type of the element
     Region bounds;  // extent of each dimension
