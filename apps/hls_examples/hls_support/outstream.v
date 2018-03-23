@@ -26,7 +26,6 @@ module outstream #(
 
 integer seed;
 integer idx_0, idx_1, idx_2, idx_3;
-integer st_idx_0, st_idx_1, st_idx_2, st_idx_3;
 integer stall;
 integer stall2;
 integer fp_ref;
@@ -73,6 +72,23 @@ initial begin
             @(posedge clk);
         end
         while(!tvalid) @(posedge clk);
+        if (idx_3 == IMG_EXTENT_3 - ST_EXTENT_3 &&
+            idx_2 == IMG_EXTENT_2 - ST_EXTENT_2 &&
+            idx_1 == IMG_EXTENT_1 - ST_EXTENT_1 &&
+            idx_0 == IMG_EXTENT_0 - ST_EXTENT_0)
+        begin
+            if(tlast !== 1)
+            begin
+                $display("TLAST check failed.");
+            end
+        end
+        else
+        begin
+            if(tlast != 0)
+            begin
+                $display("TLAST check failed.");
+            end
+        end
     end
     ready_i = 0;
     wait(stop_in);
@@ -83,18 +99,12 @@ end
 always@(*)
   tready <= ready_i;
 
-// debug
-integer cnt;
+integer st_idx_0, st_idx_1, st_idx_2, st_idx_3;
 reg[DATA_SIZE-1:0] data_out;
 always@(posedge clk)
 begin
-    if (reset)
+    if (tready&tvalid)
     begin
-        cnt = 0;
-    end
-    else if (tready&tvalid)
-    begin
-        cnt = cnt + 1;
         for(st_idx_3 = 0; st_idx_3 < ST_EXTENT_3; st_idx_3++)
         for(st_idx_2 = 0; st_idx_2 < ST_EXTENT_2; st_idx_2++)
         for(st_idx_1 = 0; st_idx_1 < ST_EXTENT_1; st_idx_1++)
