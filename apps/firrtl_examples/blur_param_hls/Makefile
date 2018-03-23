@@ -10,16 +10,16 @@ HLS_LOG = vivado_hls.log
 #### FIRRTL
 FIRRTL_CMD = ${FIRRTL_PATH}/utils/bin/firrtl
 
-.PHONY: all run_hls run_verilog
-all: out.png run_verilog
+.PHONY: all run_hls pre_verilog
+all: out.png pre_verilog
 run_hls: $(HLS_LOG)
-run_verilog: hls_target.v param_addr.dat
+pre_verilog: pipeline_firrtl.v hls_target.v param_addr.dat
 
 
 pipeline: pipeline.cpp
 	$(CXX) $(CXXFLAGS) -Wall -g $^ $(LIB_HALIDE) -o $@ $(LDFLAGS) -ltinfo
 
-pipeline_hls.cpp pipeline_native.o pipeline_zynq.cpp pipeline_arm.o pipeline_firrtl.cpp hls_target.fir: pipeline
+pipeline_hls.cpp pipeline_native.o pipeline_zynq.cpp pipeline_arm.o pipeline_firrtl.v hls_target.fir: pipeline
 	HL_DEBUG_CODEGEN=0 ./pipeline
 
 hls_target.v: hls_target.fir
