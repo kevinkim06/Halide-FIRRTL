@@ -217,9 +217,11 @@ string CodeGen_FIRRTL_Target::print_type(const Type type) {
 string CodeGen_FIRRTL_Target::print_stencil_type(FIRRTL_Type stencil_type) {
     ostringstream oss;
     // C: Stencil<uint16_t, 1, 1, 1> stencil_var;
-    // FIRRTL: UInt<16>[1][1][1] // TODO?
+    // FIRRTL: UInt<16>[1][1][1]
     // C: hls::stream<Stencil<uint16_t, 1, 1, 1> > stencil_stream_var;
-    // FIRRTL: UInt<16>[1][1][1] // TODO?
+    // FIRRTL: {value: UInt<16>[1][1][1], valid: UInt<1>, flip ready: UInt<1>}
+    // C: hls::stream<AxiPackedStencil<uint16_t, 1, 1, 1> > stencil_stream_var;
+    // FIRRTL: {TDATA: UInt<16>[1][1][1], TVALID: UInt<1>, TLAST: UInt<1>, flip TREADY: UInt<1>}
 
     switch(stencil_type.type) {
     case FIRRTL_Type::StencilContainerType::Scalar :
@@ -232,7 +234,7 @@ string CodeGen_FIRRTL_Target::print_stencil_type(FIRRTL_Type stencil_type) {
             oss << "[" << range.extent << "]";
         }
         break;
-    case FIRRTL_Type::StencilContainerType::Stream : // TODO? remove?
+    case FIRRTL_Type::StencilContainerType::Stream :
         oss << "{value : ";
         oss << print_type(stencil_type.elemType);
         for(const auto &range : stencil_type.bounds) {
@@ -253,6 +255,14 @@ string CodeGen_FIRRTL_Target::print_stencil_type(FIRRTL_Type stencil_type) {
         oss << ", TVALID : UInt<1>, ";
         oss << "flip TREADY : UInt<1>, " ;
         oss << "TLAST : UInt<1>}"; // AXI-S
+
+        break;
+    case FIRRTL_Type::StencilContainerType::MemRd :
+        oss << "{value : ";
+        oss << print_type(stencil_type.elemType);
+        oss << ", flip addr : UInt<32>";
+        //oss << "[" << stencil_type.bounds.size() << "]}";
+        oss << "[4]}"; // support up to 4D tap stencil
 
         break;
     default: internal_error;
@@ -366,6 +376,7 @@ void CodeGen_FIRRTL_Target::add_kernel(Stmt stmt,
         debug(3) << "add_kernel: " << args[i].name << " " << print_stencil_type(stype) << "\n";
         bool is_stream = (args[i].stencil_type.type == FIRRTL_Type::StencilContainerType::Stream) ||
                          (args[i].stencil_type.type == FIRRTL_Type::StencilContainerType::AxiStream);
+        bool is_stencil = args[i].stencil_type.type == FIRRTL_Type::StencilContainerType::Stencil;
         if (is_stream) { // is stream (all streams are stream of stencils).
             internal_assert(stype.type == FIRRTL_Type::StencilContainerType::AxiStream); // The very input to DUT is expected to be AxiStream for now.
 
@@ -427,6 +438,14 @@ void CodeGen_FIRRTL_Target::add_kernel(Stmt stmt,
                 // Adding output IO when "write_stream" with more than 2 args are processed.
             }
 
+        } else if (is_stencil) { // stencil, mapped to memory inside SlaveIf.
+            string s = print_name(args[i].name);
+            sif->addReg("r_" + s, stype);
+            // Wire will be added and connected for each reference.
+            //sif->addOutPort(s, stype);
+            stype.type = FIRRTL_Type::StencilContainerType::MemRd;
+            top->addWire("wire_" + s, stype); // TODO use Scope<>
+            //top->addConnect("wire_" + s, sif->getInstanceName() + "." + s);
         } else { // constant scalar or stencil
             string s = print_name(args[i].name);
             sif->addOutPort(s, stype);
@@ -531,6 +550,12 @@ void CodeGen_FIRRTL_Target::print_module(Component *c)
     for(auto &p : c->getWires()) {
         do_indent();
         stream << "wire " << p.first << " : " << print_stencil_type(p.second) << "\n";
+    }
+    stream << "\n";
+
+    for(auto &p : c->getWires()) {
+        do_indent();
+        stream << p.first << " is invalid\n";
     }
     stream << "\n";
 
@@ -700,9 +725,9 @@ void CodeGen_FIRRTL_Target::print_slaveif(SlaveIf *c)
             stream << " with : (reset => (reset, " << print_type(s.elemType) << "(0)))\n";
         } else {
             do_indent();
-            stream << "cmem " << p.first << " : {value : " << print_type(s.elemType) << "}[" << (r.range>>2) << "]\n";
-            do_indent(); stream << "wire w_" << p.first << "_rd_idx : UInt<16>\n";
-            do_indent(); stream << "wire w_" << p.first << "_wr_idx : UInt<16>\n";
+            stream << "cmem " << p.first << " : {value : " << print_type(s.elemType) << "}[" << (r.range>>2) << "]\n"; // >>2 to word count.
+            do_indent(); stream << "wire w_" << p.first << "_rd_idx : UInt<32>\n";
+            do_indent(); stream << "wire w_" << p.first << "_wr_idx : UInt<32>\n";
         }
     }
     stream << "\n";
@@ -847,33 +872,44 @@ void CodeGen_FIRRTL_Target::print_slaveif(SlaveIf *c)
         string s = p.first;
         Reg_Type r = address_map[p.first];
         s.replace(0,2,""); // remove "r_"
-        if (r.is_stencil) { // TODO: better way?
-            string regidx0, regidx1, regidx2, regidx3;
-            int idx = 0;
-            int bsize = 1;
-            if (r.extents[3] != 1) bsize = 4;
-            else if (r.extents[2] != 1) bsize = 3;
-            else if (r.extents[1] != 1) bsize = 2;
-            for(int i3 = 0; i3 < r.extents[3]; i3++) {
-                if (bsize == 4) regidx3 = "[" + std::to_string(i3) + "]";
-                else regidx3 = "";
-                for(int i2 = 0; i2 < r.extents[2]; i2++) {
-                    if (bsize >= 3) regidx2 = "[" + std::to_string(i2) + "]";
-                    else regidx2 = "";
-                    for(int i1 = 0; i1 < r.extents[1]; i1++) {
-                        if (bsize >= 2) regidx1 = "[" + std::to_string(i1) + "]";
-                        else regidx1 = "";
-                        for(int i0 = 0; i0 < r.extents[0]; i0++) {
-                            regidx0 = "[" + std::to_string(i0) + "]";
-                            string rd_idx = std::to_string(i3) + "_" + std::to_string(i2) + "_" + std::to_string(i1) + "_" + std::to_string(i0);
-                            do_indent();
-                            stream << "infer mport " << p.first << "_" << rd_idx << "_rd = ";
-                            stream << p.first << "[UInt<16>(" << idx << ")], clock\n";
-                            do_indent();
-                            stream << s+regidx3+regidx2+regidx1+regidx0 << " <= " << p.first+"_"+rd_idx+"_rd.value\n";
-                            idx++;
-                        }
+        if (r.is_stencil) { // 
+            for(auto &o : c->getOutPorts()) { // search for all output ports related to this config register which is mapped to cmem.
+                if (starts_with(o.first, s)) { // TODO: use exact bitwidth.
+                    int dim = 1; // do some simplification depending on the dimension.
+                    if (r.extents[3]!=1) dim = 4;
+                    else if (r.extents[2]!=1) dim = 3;
+                    else if (r.extents[1]!=1) dim = 2;
+                    do_indent();
+                    stream << "node " << o.first << "_idx0 = "                                                                        << o.first << ".addr[0]\n";
+                    if (dim==2) {
+                        do_indent();
+                        stream << "node " << o.first << "_idx1 = mul(UInt<32>(" << std::to_string(r.extents[0]                          ) << "), " << o.first << ".addr[1])\n";
+                        do_indent();
+                        stream << "node " << o.first << "_idx = add(" << o.first << "_idx1, " << o.first << "_idx0)\n";
+                    } else if (dim==3) {
+                        do_indent();
+                        stream << "node " << o.first << "_idx1 = mul(UInt<32>(" << std::to_string(r.extents[0]                          ) << "), " << o.first << ".addr[1])\n";
+                        do_indent();
+                        stream << "node " << o.first << "_idx2 = mul(UInt<32>(" << std::to_string(r.extents[0]*r.extents[1]             ) << "), " << o.first << ".addr[2])\n";
+                        do_indent();
+                        stream << "node " << o.first << "_idx = add(add(" << o.first << "_idx2, " << o.first << "_idx1), " << o.first << "_idx0)\n";
+                    } else if (dim==4) {
+                        do_indent();
+                        stream << "node " << o.first << "_idx1 = mul(UInt<32>(" << std::to_string(r.extents[0]                          ) << "), " << o.first << ".addr[1])\n";
+                        do_indent();
+                        stream << "node " << o.first << "_idx2 = mul(UInt<32>(" << std::to_string(r.extents[0]*r.extents[1]             ) << "), " << o.first << ".addr[2])\n";
+                        do_indent();
+                        stream << "node " << o.first << "_idx3 = mul(UInt<32>(" << std::to_string(r.extents[0]*r.extents[1]*r.extents[2]) << "), " << o.first << ".addr[3])\n";
+                        do_indent();
+                        stream << "node " << o.first << "_idx = add(add(add(" << o.first << "_idx3, " << o.first << "_idx2), " << o.first << "_idx1), " << o.first << "_idx0)\n";
+                    } else {
+                        do_indent();
+                        stream << "node " << o.first << "_idx = " << o.first << "_idx0\n";
                     }
+                    do_indent();
+                    stream << "infer mport " << o.first << "_rd = " << p.first << "[" << o.first << "_idx], clock\n";
+                    do_indent();
+                    stream << o.first << ".value <= " << o.first << "_rd.value\n";
                 }
             }
         } else {
@@ -1322,7 +1358,7 @@ void CodeGen_FIRRTL_Target::print_linebuffer(LineBuffer *c)
             stream << "[" << i1 << "][" << i0 << "]\n";
         } else if (nDim == 3) {
             stream << "[" << i2 << "][" << i1 << "][" << i0 << "]\n";
-        } else { // if (nDim == 4) {
+        } else { // if (nDim == 4) 
             stream << "[" << i3 << "][" << i2 << "][" << i1 << "][" << i0 << "]\n";
         }
     }
@@ -1342,7 +1378,7 @@ void CodeGen_FIRRTL_Target::print_linebuffer(LineBuffer *c)
             stream << "[" << i1 << "][" << i0 << "]";
         } else if (nDim == 3) {
             stream << "[" << i2 << "][" << i1 << "][" << i0 << "]";
-        } else { // if (nDim == 4) {
+        } else { // if (nDim == 4)
             stream << "[" << i3 << "][" << i2 << "][" << i1 << "][" << i0 << "]";
         }
         stream << " <= LB_" << out_stream << "_" << nDim << "D.io.out.bits.value[" << i3 << "][" << i2 << "][" << i1 << "][" << i0 << "]\n";
@@ -1679,6 +1715,8 @@ void CodeGen_FIRRTL_Target::print_linebuffer2D(string name, int L[4], Type t, in
             do_indent(); stream << "      node writeIdx_is_max = eq(writeIdx1, UInt<" << nBit_bufL1 << ">(" << bufL1-1 << "))\n";
             do_indent(); stream << "      node writeIdx_inc = tail(add(writeIdx1, UInt<1>(1)), 1)\n";
             do_indent(); stream << "      writeIdx1 <= writeIdx_inc\n";
+            do_indent(); stream << "      when writeIdx_is_max :\n";
+            do_indent(); stream << "        writeIdx1 <= UInt<" << nBit_bufL1 << ">(0)\n";
         }
         do_indent(); stream << "      skip\n";
 
@@ -1960,25 +1998,26 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     vector<int>    maxs = c->getMaxs();
     vector<int>    maxs_nBits;
     for(auto &p : maxs) {
-        maxs_nBits.push_back((int)std::ceil(std::log2((float)p+1)));
+        maxs_nBits.push_back((int)std::ceil(std::log2((float)p+1))+1);
+        // Use +1 bit to prevent becoming minus value when converted to integer.
     }
     vector<string> stencil_vars = c->getStencilVars();
     vector<int>    stencil_mins = c->getStencilMins();
     vector<int>    stencil_maxs = c->getStencilMaxs();
     vector<int>    stencil_nBits;
     for(auto &p : stencil_maxs) {
-        stencil_nBits.push_back((int)std::ceil(std::log2((float)p+1)));
+        stencil_nBits.push_back((int)std::ceil(std::log2((float)p+1))+1);
+        // Use +1 bit to prevent becoming minus value when typed cased.
     }
 
     int ppdepth = c->getPipelineDepth(); // Always 1 for now
     for(unsigned i = 0 ; i < vars.size() ; i++) {
         do_indent();
         stream << "reg " << vars[i] << " : UInt<" << maxs_nBits[i] << ">, clock with : (reset => (reset, UInt<" << maxs_nBits[i] << ">(" << mins[i] << ")))\n";
-        // TODO Let's use 16-bit counter for all case for now.
     }
     for(unsigned i = 0 ; i < stencil_vars.size() ; i++) {
         do_indent();
-        stream << "reg " << stencil_vars[i] << " : UInt<" << maxs_nBits[i] << ">, clock with : (reset => (reset, UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")))\n";
+        stream << "reg " << stencil_vars[i] << " : UInt<" << stencil_nBits[i] << ">, clock with : (reset => (reset, UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")))\n";
         for(int j = 0 ; j < ppdepth ; j++) { // for pipeline forwarding
             do_indent();
             stream << "reg " << stencil_vars[i] << "_d" << (j+1) << " : UInt<16>, clock with : (reset => (reset, UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")))\n";
@@ -2012,6 +2051,13 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
         do_indent();
         stream << p.first << " is invalid\n";
     }
+    for(auto &p : c->getInPorts()) {
+        if (p.second.type == FIRRTL_Type::StencilContainerType::MemRd) {
+            do_indent();
+            stream << p.first << ".addr is invalid\n";
+        }
+    }
+
     do_indent(); stream << "done_out is invalid\n";
     do_indent(); stream << "run_step is invalid\n";
 
@@ -2452,7 +2498,12 @@ void CodeGen_FIRRTL_Target::visit(const Variable *op) {
 
 void CodeGen_FIRRTL_Target::visit(const Cast *op)
 {
-    print_assignment(op->type, "as" + print_base_type(op->type) + "(" + print_expr(op->value) + ")");
+    if ((op->type).is_int()) {
+        // hotfix: increase bitwidth by adding 0, to prevent becomes b becomes minus in "uint8_t a = 128; int b = (int32_t)a".
+        print_assignment(op->type, "asSInt(add(" + print_expr(op->value) + ", UInt<1>(0)))");
+    } else {
+        print_assignment(op->type, "asUInt(" + print_expr(op->value) + ")");
+    }
 }
 
 void CodeGen_FIRRTL_Target::visit_uniop(Type t, Expr a, const char * op) {
@@ -2470,30 +2521,40 @@ void CodeGen_FIRRTL_Target::visit_binop(Type t, Expr a, Expr b, const char * op)
 
 void CodeGen_FIRRTL_Target::visit(const Add *op) {
     ostringstream oss; // TODO: better way?
+    if ((op->type).is_int()) {
+        oss << "asSInt("; // tail() makes everything unsigned. convert back.
+    }
     oss << "tail(add(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1)";
+    if ((op->type).is_int()) {
+        oss << ")";
+    }
     print_assignment(op->type, oss.str());
 }
 
 void CodeGen_FIRRTL_Target::visit(const Sub *op) {
     //visit_binop(op->type, op->a, op->b, "sub");
     ostringstream oss; // TODO: better way?
-    Type t;
-    //oss << "asUInt(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "))";
-    if ((op->type).is_uint()) {
-        oss << "asUInt(tail(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1))";
-        t = UInt(op->type.bits());
-    } else {
-        oss << "tail(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1)";
-        t = op->type;
+    if ((op->type).is_int()) { // tail() makes everything unsigned. convert back.
+        oss << "asSInt(";
     }
-    print_assignment(t, oss.str());
+    oss << "tail(sub(" << print_expr(op->a) << ", " << print_expr(op->b) << "), 1)";
+    if ((op->type).is_int()) {
+        oss << ")";
+    }
+    print_assignment(op->type, oss.str());
 }
 
 void CodeGen_FIRRTL_Target::visit(const Mul *op) {
     ostringstream oss;
     //visit_binop(op->type, op->a, op->b, "mul");
     int bits = op->type.bits();
+    if ((op->type).is_int()) { // bits() makes everything unsigned. convert back.
+        oss << "asSInt(";
+    }
     oss << "bits(mul(" << print_expr(op->a) << ", " << print_expr(op->b) << "), " << bits-1 << ", 0)";
+    if ((op->type).is_int()) {
+        oss << ")";
+    }
     print_assignment(op->type, oss.str());
 }
 
@@ -2514,12 +2575,13 @@ void CodeGen_FIRRTL_Target::visit(const Mod *op) {
     int bits;
     if (is_const_power_of_two_integer(op->b, &bits)) {
         ostringstream oss;
-        if ((op->type).is_uint()) {
-            oss << "asUInt(";
-        } else {
+        if ((op->type).is_int()) {
             oss << "asSInt(";
         }
-        oss << "and(" << print_expr(op->a) << ", UInt<" << (op->type).bits() << ">(" << ((1 << bits)-1) << ")))";
+        oss << "and(" << print_expr(op->a) << ", UInt<" << (op->type).bits() << ">(" << ((1 << bits)-1) << "))";
+        if ((op->type).is_int()) {
+            oss << ")";
+        }
         print_assignment(op->type, oss.str());
     } else if (op->type.is_int()) {
         print_expr(lower_euclidean_mod(op->a, op->b));
@@ -2867,33 +2929,54 @@ void CodeGen_FIRRTL_Target::visit(const Call *op)
     } else if (ends_with(op->name, ".stencil") ||
                ends_with(op->name, ".stencil_update")) {
         ostringstream rhs;
-        // IR: out.stencil_update(0, 0, 0)
-        // FIRRTL: out_stencil_update[0][0][0]
-        //vector<string> args_indices(op->args.size());
-        //vector<int> args_indices_int(op->args.size());
-        rhs << print_name(op->name) << "[";
-        //for(size_t i = 0; i < op->args.size(); i++) {
-        //    const IntImm *a  = op->args[i].as<IntImm>();
-        //    if (a) {
-        //        args_indices[i] = "";
-        //        args_indices_int[i] = a->value; // TODO: better way?
-        //    } else {
-        //        args_indices[i] = print_expr(op->args[i]);
-        //    }
-        //}
-        for(int i = op->args.size()-1; i >= 0; i--) {
-            const IntImm *a  = op->args[i].as<IntImm>();
-            if (a) {
-                rhs << std::to_string(a->value);
-            } else {
-                rhs << "asUInt(" + print_expr(op->args[i]) + ")";
+        if (ends_with(op->name, "tap.stencil")) { // tap.stencil is mapped to cmem
+            internal_assert(current_fb);
+            // Hot Fix for cmem mapped tap stencil.
+            // IR: out.stencil_update(0, 0, c)
+            // FIRRTL: out_stencil_update_0_0_c : {value : UInt<>, flip addr : UInt<16>[3]}
+            // out_stencil_update_0_0_c.addr[0] <= 0
+            // out_stencil_update_0_0_c.addr[1] <= 0
+            // out_stencil_update_0_0_c.addr[2] <= c
+            // node .... <= out_stencil_update_0_0_c.value
+            rhs << print_name(op->name) << "_";
+            for(int i = op->args.size()-1; i >= 0; i--) {
+                const IntImm *idx = op->args[i].as<IntImm>();
+                if (idx) { // simplify if possible.
+                    rhs << "_" + std::to_string(idx->value);
+                } else {
+                    rhs << "_" + print_expr(op->args[i]);
+                }
             }
-            if (i != 0)
-                rhs << "][";
+            string a = print_name(op->name);
+            FIRRTL_Type stype = top->getWire("wire_" + a); // TODO use Scope<>
+            stype.type = FIRRTL_Type::StencilContainerType::MemRd; // 
+            string wirename = rhs.str() + "_" + current_fb->getInstanceName();
+            top->addWire("wire_" + wirename, stype);
+            top->addConnect("wire_" + wirename, sif->getInstanceName() + "." + wirename);
+            top->addConnect(current_fb->getInstanceName() + "." + rhs.str(), "wire_" + wirename);
+            current_fb->addInPort(rhs.str(), stype);
+            sif->addOutPort(wirename, stype);
+            for(size_t i = 0; i < op->args.size(); i++) {
+                current_fb->print(rhs.str()+".addr["+std::to_string(i)+"] <= asUInt("+print_expr(op->args[i])+")\n");
+            }
+            print_assignment(op->type, rhs.str()+".value");
+        } else {
+            // IR: out.stencil_update(0, 0, 0)
+            // FIRRTL: out_stencil_update[0][0][0]
+            rhs << print_name(op->name) << "[";
+            for(int i = op->args.size()-1; i >= 0; i--) {
+                const IntImm *a  = op->args[i].as<IntImm>();
+                if (a) {
+                    rhs << std::to_string(a->value);
+                } else {
+                    rhs << "asUInt(" + print_expr(op->args[i]) + ")";
+                }
+                if (i != 0)
+                    rhs << "][";
+            }
+            rhs << "]";
+            print_assignment(op->type, rhs.str());
         }
-        rhs << "]";
-
-        print_assignment(op->type, rhs.str());
     } else if (op->name == "dispatch_stream") {
         // emits the calling arguments in comment
         vector<string> args(op->args.size());
@@ -3139,9 +3222,11 @@ void CodeGen_FIRRTL_Target::visit(const For *op)
         for(auto &s: args) { // Create ports and connect for variables.
             string a = print_name(s);
             if (for_scanvar_list[0] != a) { // ignore scan var, TODO Do we need this? Better way?
-                FIRRTL_Type stype = top->getWire("wire_" + a);
-                fb->addInPort(a, stype);
-                top->addConnect(fb->getInstanceName() + "." + a, "wire_" + a);
+                if (!ends_with(s, "tap.stencil")) { // tap_stencil will be added later.
+                    FIRRTL_Type stype = top->getWire("wire_" + a);
+                    fb->addInPort(a, stype);
+                    top->addConnect(fb->getInstanceName() + "." + a, "wire_" + a);
+                }
             }
         }
 
