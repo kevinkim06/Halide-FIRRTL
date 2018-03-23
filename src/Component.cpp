@@ -34,6 +34,7 @@ string Component::print_stencil_type(FIRRTL_Type stencil_type) {
         break;
     case FIRRTL_Type::StencilContainerType::Stencil :
     case FIRRTL_Type::StencilContainerType::Stream :
+    case FIRRTL_Type::StencilContainerType::MemRd : // FIXME
         oss << print_type(stencil_type.elemType);
         for(size_t i = 0 ; i < stencil_type.bounds.size() ; i++ ) {
             if (i==0) {
