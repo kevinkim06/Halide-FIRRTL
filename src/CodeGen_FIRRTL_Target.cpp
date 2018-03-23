@@ -1060,10 +1060,10 @@ void CodeGen_FIRRTL_Target::print_io(IO *c)
     open_scope();
 
     for(int i = 0 ; i < store_extents_size ; i++) {
-        do_indent(); stream << "node counter_" << i << "_is_max = eq(counter_" << i << ", UInt<" << se_nBits[i] << ">(" << store_extents[i]-stencil_size[i] << "))\n";
+        do_indent(); stream << "node counter_" << i << "_is_max = eq(counter_" << i << ", UInt(" << store_extents[i]-stencil_size[i] << "))\n";
         // Note: stencil_size can be bigger than 1. For input IO, store bounds are only availabel in 
         // testbench side through "subimage_to_stream()", so it should be inferred from image size and stencil size.
-        do_indent(); stream << "node counter_" << i << "_inc_c = add(counter_" << i << ", UInt<" << se_nBits[i] << ">(" << stencil_size[i] << "))\n";
+        do_indent(); stream << "node counter_" << i << "_inc_c = add(counter_" << i << ", UInt(" << stencil_size[i] << "))\n";
         do_indent(); stream << "node counter_" << i << "_inc = tail(counter_" << i << "_inc_c, 1)\n";
         do_indent(); stream << "counter_" << i << " <= counter_" << i << "_inc\n";
         do_indent(); stream << "when counter_" << i << "_is_max :\n";
@@ -2449,8 +2449,8 @@ void CodeGen_FIRRTL_Target::print_dispatch(Dispatch *c)
         }
         int max = store_extents[i] - stencil_sizes[i];
         int step = stencil_steps[i];
-        do_indent(); stream << "node counter" << i << "_is_max = eq(counter" << i << ", UInt<" << store_nBits[i] << ">(" << max << "))\n";
-        do_indent(); stream << "node counter" << i << "_inc_c = add(counter" << i << ", UInt<" << store_nBits[i] << ">(" << step << "))\n";
+        do_indent(); stream << "node counter" << i << "_is_max = eq(counter" << i << ", UInt(" << max << "))\n";
+        do_indent(); stream << "node counter" << i << "_inc_c = add(counter" << i << ", UInt(" << step << "))\n";
         do_indent(); stream << "node counter" << i << "_inc = tail(counter" << i << "_inc_c, 1)\n";
         do_indent(); stream << "counter" << i << " <= counter" << i << "_inc\n";
         do_indent(); stream << "when counter" << i << "_is_max :\n";
@@ -3117,12 +3117,27 @@ void CodeGen_FIRRTL_Target::visit(const Call *op)
 
 void CodeGen_FIRRTL_Target::visit(const Load *op)
 {
-    internal_error << "Load is not supported.\n"; // TODO
+    ostringstream rhs;
+    Type t = op->type;
+    string name = print_name(op->name);
+
+    string id_index = print_expr(op->index);
+    rhs << name;
+    rhs << "[asUInt(" << id_index << ")]";
+
+    print_assignment(t, rhs.str());
 }
 
 void CodeGen_FIRRTL_Target::visit(const Store *op)
 {
-    internal_error << "Store is not supported.\n"; // TODO
+    debug(3) << "CodeGen_FIRRTL_Target::visit(Store) " << op->name << "\n";
+
+    string id_value = print_expr(op->value);
+    string id_index = print_expr(op->index);
+    string name = print_name(op->name);
+
+    internal_assert(current_fb); // for now Allocate/Store/Load is supported only inside of for-loop body.
+    current_fb->print(name + "[asUInt(" + id_index + ")] <= " + id_value + "\n");
 
     cache.clear();
 }
@@ -3304,15 +3319,80 @@ void CodeGen_FIRRTL_Target::visit(const Provide *op)
     }
 }
 
+// Copied from CodeGen_HLS_Target.cpp and renamed.
+class FirrtlRenameAllocation : public IRMutator {
+    const string &orig_name;
+    const string &new_name;
+
+    using IRMutator::visit;
+
+    void visit(const Load *op) {
+        if (op->name == orig_name ) {
+            Expr index = mutate(op->index);
+            expr = Load::make(op->type, new_name, index, op->image, op->param, op->predicate);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const Store *op) {
+        if (op->name == orig_name ) {
+            Expr value = mutate(op->value);
+            Expr index = mutate(op->index);
+            stmt = Store::make(new_name, value, index, op->param, op->predicate);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+    void visit(const Free *op) {
+        if (op->name == orig_name) {
+            stmt = Free::make(new_name);
+        } else {
+            IRMutator::visit(op);
+        }
+    }
+
+public:
+    FirrtlRenameAllocation(const string &o, const string &n)
+        : orig_name(o), new_name(n) {}
+};
+
+// most code is copied from CodeGen_HLS_Target::visit(const Allocate *)
 void CodeGen_FIRRTL_Target::visit(const Allocate *op)
 {
-    stream << "reg " << op->name << ": ____TODO____\n";
-    print(op->body);
+    //stream << "reg " << op->name << ": ____TODO____\n";
+    //print(op->body);
+    internal_assert(!op->new_expr.defined());
+    internal_assert(!is_zero(op->condition));
+    int32_t constant_size;
+    constant_size = op->constant_allocation_size();
+    if (constant_size > 0) {
+
+    } else {
+        internal_error << "Size for allocation " << op->name
+                       << " is not a constant.\n";
+    }
+
+    debug(3) << "CodeGen_FIRRTL_Target::visit(Allocate) " << op->name << " size=" << constant_size << " type=" << print_type(op->type) << "\n";
+
+    // rename allocation to avoid name conflict due to unrolling
+    string alloc_name = op->name + unique_name('a');
+    Stmt new_body = FirrtlRenameAllocation(op->name, alloc_name).mutate(op->body);
+
+    internal_assert(current_fb); // for now Allocate is supported only inside of for-loop body.
+    Region bounds;
+    bounds.push_back(Range(0, constant_size));
+    FIRRTL_Type stencil_type({FIRRTL_Type::StencilContainerType::Stencil, op->type, bounds, 1, {}});
+    current_fb->addReg(print_name(alloc_name), stencil_type);
+
+    new_body.accept(this);
+
 }
 
 void CodeGen_FIRRTL_Target::visit(const Free *op)
 {
-    internal_error << "Free is not supported.\n";
+    // Hardware register cannot be freed.
 }
 
 void CodeGen_FIRRTL_Target::visit(const Realize *op)
