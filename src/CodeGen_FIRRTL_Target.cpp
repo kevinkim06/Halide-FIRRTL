@@ -2498,11 +2498,13 @@ void CodeGen_FIRRTL_Target::visit(const Variable *op) {
 
 void CodeGen_FIRRTL_Target::visit(const Cast *op)
 {
+    // Solution to match with C type conversion rule:
+    //   Perform Bit-width extension before type conversion.
+    string b = std::to_string((op->type).bits());
     if ((op->type).is_int()) {
-        // hotfix: increase bitwidth by adding 0, to prevent becomes b becomes minus in "uint8_t a = 128; int b = (int32_t)a".
-        print_assignment(op->type, "asSInt(add(" + print_expr(op->value) + ", UInt<1>(0)))");
+        print_assignment(op->type, "asSInt(pad(" + print_expr(op->value) + ", " + b + "))");
     } else {
-        print_assignment(op->type, "asUInt(" + print_expr(op->value) + ")");
+        print_assignment(op->type, "asUInt(pad(" + print_expr(op->value) + ", " + b + "))");
     }
 }
 
