@@ -274,15 +274,13 @@ string CodeGen_FIRRTL_Target::print_assignment(Type t, const std::string &rhs) {
 
     map<string, string>::iterator cached = cache.find(rhs);
 
-    // FIXME: better way? // signed/unsigned...
-    FIRRTL_Type wire_type = {FIRRTL_Type::StencilContainerType::Scalar,t,Region(),0,{}};
-
     id = unique_name('_');
 
     if (cached == cache.end()) {
         if (current_fb!=nullptr) { // Inside ForBlock, print to ForBlock oss_body directly.
             current_fb->print("node " + id + " = " + rhs + "\n");
         } else {
+            FIRRTL_Type wire_type = {FIRRTL_Type::StencilContainerType::Scalar,t,Region(),0,{}};
             top->addWire(id, wire_type);
             top->addConnect(id, rhs);
         }
@@ -291,12 +289,6 @@ string CodeGen_FIRRTL_Target::print_assignment(Type t, const std::string &rhs) {
         id = cached->second;
     }
     return id;
-}
-
-string CodeGen_FIRRTL_Target::print_reinterpret(Type type, Expr e) {
-    ostringstream oss;
-    oss << "as" << print_base_type(type) << "(" << print_expr(e) << ")"; // TODO
-    return oss.str();
 }
 
 void CodeGen_FIRRTL_Target::add_kernel(Stmt stmt,
@@ -2152,7 +2144,7 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     do_indent(); stream << "run_step <= UInt<1>(1)\n"; // move pipeline one step forward (when ready&valid)
     if (!no_state1) { // go to state1 for iteration
         do_indent(); stream << "state <= UInt<2>(1)\n";
-        do_indent(); stream << stencil_vars[stencil_vars.size()-1] << " <= SInt<1>(1)\n"; // increase last stencil var
+        do_indent(); stream << stencil_vars[stencil_vars.size()-1] << " <= SInt(1)\n"; // increase last stencil var
     } else {
         for(auto &p : c->getInputs()) {
             do_indent(); stream << p.first << ".ready <= UInt<1>(1)\n"; // pop from previous FIFO
@@ -2501,28 +2493,26 @@ void CodeGen_FIRRTL_Target::visit(const Variable *op) {
 void CodeGen_FIRRTL_Target::visit(const Cast *op)
 {
     // Solution to match with C type conversion rule:
-    //   Perform Bit-width extension before type conversion.
+    //   Perform Bit-width extension/shrink before type conversion.
+
     int lhs_bits = (op->type).bits();
     int rhs_bits = (op->value).type().bits();
+
     if (lhs_bits==rhs_bits) { // simplification
         if ((op->type).is_int()) {
             print_assignment(op->type, "asSInt(" + print_expr(op->value) + ")");
         } else {
             print_assignment(op->type, "asUInt(" + print_expr(op->value) + ")");
         }
-    } else if (lhs_bits>rhs_bits) {
-        string b = std::to_string(lhs_bits);
-        if ((op->type).is_int()) {
-            print_assignment(op->type, "asSInt(pad(" + print_expr(op->value) + ", " + b + "))");
-        } else {
-            print_assignment(op->type, "asUInt(pad(" + print_expr(op->value) + ", " + b + "))");
-        }
+    } else if (lhs_bits>rhs_bits) { // narrow to wider
+        string b = std::to_string(lhs_bits); // pad() doesn't change type.
+        print_assignment(op->type, "pad(" + print_expr(op->value) + ", " + b + ")");
     } else {
-        string b = std::to_string(lhs_bits-1);
-        if ((op->type).is_int()) {
+        string b = std::to_string(lhs_bits-1); // wide to narrower
+        if ((op->type).is_int()) { // bits() result is always unsigned.
             print_assignment(op->type, "asSInt(bits(" + print_expr(op->value) + ", " + b + ", 0))");
         } else {
-            print_assignment(op->type, "asUInt(bits(" + print_expr(op->value) + ", " + b + ", 0))");
+            print_assignment(op->type, "bits(" + print_expr(op->value) + ", " + b + ", 0)");
         }
     }
 }
@@ -2541,7 +2531,7 @@ void CodeGen_FIRRTL_Target::visit_binop(Type t, Expr a, Expr b, const char * op)
 }
 
 void CodeGen_FIRRTL_Target::visit(const Add *op) {
-    ostringstream oss; // TODO: better way?
+    ostringstream oss;
     if ((op->type).is_int()) {
         oss << "asSInt("; // tail() makes everything unsigned. convert back.
     }
@@ -2554,7 +2544,7 @@ void CodeGen_FIRRTL_Target::visit(const Add *op) {
 
 void CodeGen_FIRRTL_Target::visit(const Sub *op) {
     //visit_binop(op->type, op->a, op->b, "sub");
-    ostringstream oss; // TODO: better way?
+    ostringstream oss;
     if ((op->type).is_int()) { // tail() makes everything unsigned. convert back.
         oss << "asSInt(";
     }
@@ -2583,7 +2573,7 @@ void CodeGen_FIRRTL_Target::visit(const Div *op) {
     int bits;
     if (is_const_power_of_two_integer(op->b, &bits)) {
         ostringstream oss;
-        oss << "dshr(" << print_expr(op->a) << ", UInt<8>(" << bits << "))"; // TODO is 16 proper? signed b?
+        oss << "shr(" << print_expr(op->a) << ", " << bits << ")";
         print_assignment(op->type, oss.str());
     } else if (op->type.is_int()) {
         print_expr(lower_euclidean_div(op->a, op->b));
@@ -2613,25 +2603,19 @@ void CodeGen_FIRRTL_Target::visit(const Mod *op) {
 
 void CodeGen_FIRRTL_Target::visit(const Max *op)
 {
-    //print_expr(Call::make(op->type, "max", {op->a, op->b}, Call::Extern));
-    // FIXME:
     Expr cond = op->a > op->b;
     Expr true_value = op->a;
     Expr false_value = op->b;
     Expr new_expr = Select::make(cond, true_value, false_value);
-    //visit_binop(op->type, op->a, op->b, "max");
     print(new_expr);
 }
 
 void CodeGen_FIRRTL_Target::visit(const Min *op)
 {
-    //print_expr(Call::make(op->type, "min", {op->a, op->b}, Call::Extern));
-    // FIXME:
     Expr cond = op->a < op->b;
     Expr true_value = op->a;
     Expr false_value = op->b;
     Expr new_expr = Select::make(cond, true_value, false_value);
-    //visit_binop(op->type, op->a, op->b, "min");
     print(new_expr);
 }
 
@@ -2713,7 +2697,6 @@ static bool isinf(T x)
 
 void CodeGen_FIRRTL_Target::visit(const FloatImm *op)
 {
-    // FIXME:
     internal_assert(true) << "Not support floating yet..\n";
 }
 
@@ -2748,24 +2731,37 @@ void CodeGen_FIRRTL_Target::visit(const Call *op)
         ostringstream rhs;
         internal_assert(op->args.size() == 1);
         Expr a = op->args[0];
-        rhs << print_reinterpret(op->type, op->args[0]);
+        Expr cast_a = cast(op->type, a);
+        rhs << print_expr(cast_a);
         print_assignment(op->type, rhs.str());
     } else if (op->is_intrinsic(Call::shift_left)) {
         internal_assert(op->args.size() == 2);
         Expr a = op->args[0];
         Expr b = op->args[1];
-        string sa = print_expr(a);
-        string sb = print_expr(b);
-        Type t = UInt(8); // Workaround for the limit: dshl(e, n), n should be 18(or 19) bit or less. 8 might be enough.
-        Expr cast_b = cast(t, b);
-        visit_binop(op->type, a, cast_b, "dshl");
+        const UIntImm *b_imm = b.as<UIntImm>();
+        if (b_imm) { // Constant shift, use shl
+            ostringstream rhs;
+            rhs << "shl(" << print_expr(a) << ", " << b_imm->value << ")";
+            print_assignment(op->type, rhs.str());
+        } else {
+            Type t = UInt(8); // Workaround for the limit: dshl(e, n), n should be 19(or 20) bit or less. 8 might be enough.
+            Expr cast_b = cast(t, b);
+            visit_binop(op->type, a, cast_b, "dshl");
+        }
     } else if (op->is_intrinsic(Call::shift_right)) {
         internal_assert(op->args.size() == 2);
         Expr a = op->args[0];
         Expr b = op->args[1];
-        Type t = UInt(8); // Workaround for the limit: dshr(e, n), n should be 18(or 19) bit or less. 8 might be enough.
-        Expr cast_b = cast(t, b);
-        visit_binop(op->type, a, cast_b, "dshr");
+        const UIntImm *b_imm = b.as<UIntImm>();
+        if (b_imm) { // Constant shift, use shr
+            ostringstream rhs;
+            rhs << "shr(" << print_expr(a) << ", " << std::to_string(b_imm->value) << ")";
+            print_assignment(op->type, rhs.str());
+        } else {
+            Type t = UInt(op->type.bits());
+            Expr cast_b = cast(t, b);
+            visit_binop(op->type, a, cast_b, "dshr");
+        }
     } else if (op->is_intrinsic(Call::lerp)) {
         internal_error << "Call::lerp. What is this? Do we need to support?\n"; // TODO: Do we need this?
     } else if (op->is_intrinsic(Call::absd)) {
