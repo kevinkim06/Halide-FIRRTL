@@ -2013,14 +2013,16 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     int ppdepth = c->getPipelineDepth(); // Always 1 for now
     for(unsigned i = 0 ; i < vars.size() ; i++) {
         do_indent();
-        stream << "reg " << vars[i] << " : UInt<" << maxs_nBits[i] << ">, clock with : (reset => (reset, UInt<" << maxs_nBits[i] << ">(" << mins[i] << ")))\n";
+        // Let's use 32-bit integer so that its behavior is matching with HLS C.
+        stream << "reg " << vars[i] << " : SInt<32>, clock with : (reset => (reset, SInt<32>(" << mins[i] << ")))\n";
     }
     for(unsigned i = 0 ; i < stencil_vars.size() ; i++) {
         do_indent();
-        stream << "reg " << stencil_vars[i] << " : UInt<" << stencil_nBits[i] << ">, clock with : (reset => (reset, UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")))\n";
+        // Let's use 32-bit integer so that its behavior is matching with HLS C.
+        stream << "reg " << stencil_vars[i] << " : SInt<32>, clock with : (reset => (reset, SInt<32>(" << stencil_mins[i] << ")))\n";
         for(int j = 0 ; j < ppdepth ; j++) { // for pipeline forwarding
             do_indent();
-            stream << "reg " << stencil_vars[i] << "_d" << (j+1) << " : UInt<16>, clock with : (reset => (reset, UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")))\n";
+            stream << "reg " << stencil_vars[i] << "_d" << (j+1) << " : SInt<32>, clock with : (reset => (reset, SInt<32>(" << stencil_mins[i] << ")))\n";
         }
     }
     for(int j = 0 ; j < ppdepth ; j++) { // for pipeline forwarding
@@ -2075,14 +2077,14 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     do_indent(); stream << "started <= UInt<1>(1)\n";
     for(unsigned i = 0 ; i < vars.size() ; i++) {
         do_indent();
-        stream << vars[i] << " <= UInt<" << maxs_nBits[i] << ">(" << mins[i] << ")\n";
+        stream << vars[i] << " <= SInt<32>(" << mins[i] << ")\n";
     }
     for(unsigned i = 0 ; i < stencil_vars.size() ; i++) {
         do_indent();
-        stream << stencil_vars[i] << " <= UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")\n";
+        stream << stencil_vars[i] << " <= SInt<32>(" << stencil_mins[i] << ")\n";
         for(int j = 0 ; j < ppdepth ; j++) {
             do_indent();
-            stream << stencil_vars[i] << "_d" << (j+1) << " <= UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")\n";
+            stream << stencil_vars[i] << "_d" << (j+1) << " <= SInt<32>(" << stencil_mins[i] << ")\n";
         }
     }
     for(int j = 0 ; j < ppdepth ; j++) {
@@ -2130,13 +2132,13 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     }
 
     for(int i = vars.size()-1 ; i >= 0 ; i--) { // reverse order
-        do_indent(); stream << "node " << vars[i] << "_is_max = eq(" << vars[i] << ", UInt<" << maxs_nBits[i] << ">(" << maxs[i] << "))\n";
-        do_indent(); stream << "node " << vars[i] << "_inc_c = add(" << vars[i] << ", UInt<1>(1))\n";
-        do_indent(); stream << "node " << vars[i] << "_inc = tail(" << vars[i] << "_inc_c, 1)\n";
+        do_indent(); stream << "node " << vars[i] << "_is_max = eq(" << vars[i] << ", SInt<32>(" << maxs[i] << "))\n";
+        do_indent(); stream << "node " << vars[i] << "_inc_c = add(" << vars[i] << ", SInt(1))\n";
+        do_indent(); stream << "node " << vars[i] << "_inc = asSInt(tail(" << vars[i] << "_inc_c, 1))\n";
         do_indent(); stream << vars[i] << " <= " << vars[i] << "_inc\n";
         do_indent(); stream << "when " << vars[i] << "_is_max :\n";
         open_scope();
-        do_indent(); stream << vars[i] << " <= UInt<" << maxs_nBits[i] << ">(" << mins[i] << ")\n";
+        do_indent(); stream << vars[i] << " <= SInt<32>(" << mins[i] << ")\n";
     }
     do_indent(); stream << "is_last_stencil <= UInt<1>(1)\n";
     if (no_state1) {
@@ -2150,7 +2152,7 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     do_indent(); stream << "run_step <= UInt<1>(1)\n"; // move pipeline one step forward (when ready&valid)
     if (!no_state1) { // go to state1 for iteration
         do_indent(); stream << "state <= UInt<2>(1)\n";
-        do_indent(); stream << stencil_vars[stencil_vars.size()-1] << " <= UInt<1>(1)\n"; // increase last stencil var
+        do_indent(); stream << stencil_vars[stencil_vars.size()-1] << " <= SInt<1>(1)\n"; // increase last stencil var
     } else {
         for(auto &p : c->getInputs()) {
             do_indent(); stream << p.first << ".ready <= UInt<1>(1)\n"; // pop from previous FIFO
@@ -2172,13 +2174,13 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
         do_indent(); stream << "run_step <= UInt<1>(1)\n"; // move pipeline one step forward (when ready&valid)
 
         for(int i = stencil_vars.size()-1 ; i >= 0 ; i--) { // reverse order
-            do_indent(); stream << "node " << stencil_vars[i] << "_is_max = eq(" << stencil_vars[i] << ", UInt<" << stencil_nBits[i] << ">(" << stencil_maxs[i] << "))\n";
-            do_indent(); stream << "node " << stencil_vars[i] << "_inc_c = add(" << stencil_vars[i] << ", UInt<1>(1))\n";
-            do_indent(); stream << "node " << stencil_vars[i] << "_inc = tail(" << stencil_vars[i] << "_inc_c, 1)\n";
+            do_indent(); stream << "node " << stencil_vars[i] << "_is_max = eq(" << stencil_vars[i] << ", SInt<32>(" << stencil_maxs[i] << "))\n";
+            do_indent(); stream << "node " << stencil_vars[i] << "_inc_c = add(" << stencil_vars[i] << ", SInt(1))\n";
+            do_indent(); stream << "node " << stencil_vars[i] << "_inc = asSInt(tail(" << stencil_vars[i] << "_inc_c, 1))\n";
             do_indent(); stream << stencil_vars[i] << " <= " << stencil_vars[i] << "_inc\n";
             do_indent(); stream << "when " << stencil_vars[i] << "_is_max :\n";
             open_scope();
-            do_indent(); stream << stencil_vars[i] << " <= UInt<" << stencil_nBits[i] << ">(" << stencil_mins[i] << ")\n";
+            do_indent(); stream << stencil_vars[i] << " <= SInt<32>(" << stencil_mins[i] << ")\n";
         }
         for(auto &p : c->getInputs()) { // pop from previous FIFO
             do_indent(); stream << p.first << ".ready <= UInt<1>(1)\n";
@@ -2207,7 +2209,7 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     open_scope();
     for(unsigned i = 0 ; i < stencil_vars.size() ; i++) {
         do_indent();
-        stream << "when eq(" << stencil_vars[i] << "_d" << ppdepth << ", UInt<" << stencil_nBits[i] << ">(" << stencil_maxs[i] << ")) :\n";
+        stream << "when eq(" << stencil_vars[i] << "_d" << ppdepth << ", SInt<32>(" << stencil_maxs[i] << ")) :\n";
         open_scope();
     }
     do_indent(); stream << "state <= UInt<2>(0)\n";
@@ -2238,7 +2240,7 @@ void CodeGen_FIRRTL_Target::print_forblock(ForBlock *c)
     if (!no_state1) { // if there is stencil variable(s) max value is bigger than 0, generate output valid based on the stencil counter.
         for(unsigned i = 0 ; i < stencil_vars.size() ; i++) {
             do_indent();
-            stream << "when eq(" << stencil_vars[i] << "_d" << ppdepth << ", UInt<" << stencil_nBits[i] << ">(" << stencil_maxs[i] << ")) :\n";
+            stream << "when eq(" << stencil_vars[i] << "_d" << ppdepth << ", SInt<32>(" << stencil_maxs[i] << ")) :\n";
             open_scope();
         }
 
@@ -2500,11 +2502,28 @@ void CodeGen_FIRRTL_Target::visit(const Cast *op)
 {
     // Solution to match with C type conversion rule:
     //   Perform Bit-width extension before type conversion.
-    string b = std::to_string((op->type).bits());
-    if ((op->type).is_int()) {
-        print_assignment(op->type, "asSInt(pad(" + print_expr(op->value) + ", " + b + "))");
+    int lhs_bits = (op->type).bits();
+    int rhs_bits = (op->value).type().bits();
+    if (lhs_bits==rhs_bits) { // simplification
+        if ((op->type).is_int()) {
+            print_assignment(op->type, "asSInt(" + print_expr(op->value) + ")");
+        } else {
+            print_assignment(op->type, "asUInt(" + print_expr(op->value) + ")");
+        }
+    } else if (lhs_bits>rhs_bits) {
+        string b = std::to_string(lhs_bits);
+        if ((op->type).is_int()) {
+            print_assignment(op->type, "asSInt(pad(" + print_expr(op->value) + ", " + b + "))");
+        } else {
+            print_assignment(op->type, "asUInt(pad(" + print_expr(op->value) + ", " + b + "))");
+        }
     } else {
-        print_assignment(op->type, "asUInt(pad(" + print_expr(op->value) + ", " + b + "))");
+        string b = std::to_string(lhs_bits-1);
+        if ((op->type).is_int()) {
+            print_assignment(op->type, "asSInt(bits(" + print_expr(op->value) + ", " + b + ", 0))");
+        } else {
+            print_assignment(op->type, "asUInt(bits(" + print_expr(op->value) + ", " + b + ", 0))");
+        }
     }
 }
 
@@ -2564,7 +2583,7 @@ void CodeGen_FIRRTL_Target::visit(const Div *op) {
     int bits;
     if (is_const_power_of_two_integer(op->b, &bits)) {
         ostringstream oss;
-        oss << "dshr(" << print_expr(op->a) << ", UInt<32>(" << bits << "))"; // TODO is 32 proper?
+        oss << "dshr(" << print_expr(op->a) << ", UInt<8>(" << bits << "))"; // TODO is 16 proper? signed b?
         print_assignment(op->type, oss.str());
     } else if (op->type.is_int()) {
         print_expr(lower_euclidean_div(op->a, op->b));
@@ -2737,14 +2756,14 @@ void CodeGen_FIRRTL_Target::visit(const Call *op)
         Expr b = op->args[1];
         string sa = print_expr(a);
         string sb = print_expr(b);
-        Type t = UInt(16); // Workaround for the limit: dshl(e, n), n should be 18(or 19) bit or less. 16 might be enough.
+        Type t = UInt(8); // Workaround for the limit: dshl(e, n), n should be 18(or 19) bit or less. 8 might be enough.
         Expr cast_b = cast(t, b);
         visit_binop(op->type, a, cast_b, "dshl");
     } else if (op->is_intrinsic(Call::shift_right)) {
         internal_assert(op->args.size() == 2);
         Expr a = op->args[0];
         Expr b = op->args[1];
-        Type t = UInt(16); // Workaround for the limit: dshr(e, n), n should be 18(or 19) bit or less. 16 might be enough.
+        Type t = UInt(8); // Workaround for the limit: dshr(e, n), n should be 18(or 19) bit or less. 8 might be enough.
         Expr cast_b = cast(t, b);
         visit_binop(op->type, a, cast_b, "dshr");
     } else if (op->is_intrinsic(Call::lerp)) {
