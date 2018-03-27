@@ -90,9 +90,6 @@ protected:
     std::string print_type(Type);
     std::string print_stencil_type(FIRRTL_Type);
 
-    /** Emit a statement to reinterpret an expression as another type */
-    virtual std::string print_reinterpret(Type, Expr);
-
     // CodeGen for For statements
     int pipeline_depth;
     ForBlock *current_fb;
