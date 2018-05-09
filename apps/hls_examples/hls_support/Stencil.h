@@ -243,6 +243,17 @@ void buffer_to_stencil(const halide_buffer_t *buffer,
 }
 
 template <typename T, size_t EXTENT_0, size_t EXTENT_1, size_t EXTENT_2, size_t EXTENT_3>
+void stencil_to_file(FILE *fp, const char *name,
+                       Stencil<T, EXTENT_0, EXTENT_1, EXTENT_2, EXTENT_3> &stencil) {
+    for(size_t idx_3 = 0; idx_3 < EXTENT_3; idx_3++)
+    for(size_t idx_2 = 0; idx_2 < EXTENT_2; idx_2++)
+    for(size_t idx_1 = 0; idx_1 < EXTENT_1; idx_1++)
+    for(size_t idx_0 = 0; idx_0 < EXTENT_0; idx_0++) {
+        fprintf(fp, "%s_%d_%d_%d_%d %d\n", name, (int)idx_3, (int)idx_2, (int)idx_1, (int)idx_0, stencil(idx_0, idx_1, idx_2, idx_3));
+    }
+}
+
+template <typename T, size_t EXTENT_0, size_t EXTENT_1, size_t EXTENT_2, size_t EXTENT_3>
 void subimage_to_stream(const struct halide_buffer_t *buf_noop,
                         hls::stream<AxiPackedStencil<T, EXTENT_0, EXTENT_1, EXTENT_2, EXTENT_3> > &stream,
                         void *subimage,
@@ -314,6 +325,41 @@ void stream_to_subimage(const struct halide_buffer_t *buf_noop,
         } else {
             if(axi_stencil.last != 0) {
                 printf("TLAS check failed.\n");
+            }
+        }
+    }
+}
+
+template <typename T, size_t EXTENT_0, size_t EXTENT_1, size_t EXTENT_2, size_t EXTENT_3>
+void subimage_to_file(FILE *fp,
+                        const struct halide_buffer_t *buf_noop,
+                        hls::stream<AxiPackedStencil<T, EXTENT_0, EXTENT_1, EXTENT_2, EXTENT_3> > &stream,
+                        void *subimage,
+                        int stride_0, int subimage_extent_0,
+                        int stride_1 = 1, int subimage_extent_1 = 1,
+                        int stride_2 = 1, int subimage_extent_2 = 1,
+                        int stride_3 = 1, int subimage_extent_3 = 1) {
+    assert(subimage_extent_0 % EXTENT_0 == 0);
+    assert(subimage_extent_1 % EXTENT_1 == 0);
+    assert(subimage_extent_2 % EXTENT_2 == 0);
+    assert(subimage_extent_3 % EXTENT_3 == 0);
+    (void) buf_noop;  // avoid unused warnning
+    for(size_t idx_3 = 0; idx_3 < (unsigned)subimage_extent_3; idx_3 += EXTENT_3)
+    for(size_t idx_2 = 0; idx_2 < (unsigned)subimage_extent_2; idx_2 += EXTENT_2)
+    for(size_t idx_1 = 0; idx_1 < (unsigned)subimage_extent_1; idx_1 += EXTENT_1)
+    for(size_t idx_0 = 0; idx_0 < (unsigned)subimage_extent_0; idx_0 += EXTENT_0) {
+        Stencil<T, EXTENT_0, EXTENT_1, EXTENT_2, EXTENT_3> stencil;
+        for(size_t st_idx_3 = 0; st_idx_3 < EXTENT_3; st_idx_3++)
+        for(size_t st_idx_2 = 0; st_idx_2 < EXTENT_2; st_idx_2++)
+        for(size_t st_idx_1 = 0; st_idx_1 < EXTENT_1; st_idx_1++)
+        for(size_t st_idx_0 = 0; st_idx_0 < EXTENT_0; st_idx_0++) {
+            int offset = (idx_0 + st_idx_0) * stride_0 +
+                (idx_1 + st_idx_1) * stride_1 +
+                (idx_2 + st_idx_2) * stride_2 +
+                (idx_3 + st_idx_3) * stride_3;
+            stencil(st_idx_0, st_idx_1, st_idx_2, st_idx_3) = *((T *)subimage + offset);
+            if (fp!=NULL) {
+                fprintf(fp, "%d\n", stencil(st_idx_0, st_idx_1, st_idx_2, st_idx_3));
             }
         }
     }

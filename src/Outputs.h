@@ -42,6 +42,10 @@ struct Outputs {
      * output is desired. */
     std::string hls_source_name;
 
+    /** The name of the emitted FIRRTL source file. Empty if no FIRRTL source file
+     * output is desired. */
+    std::string firrtl_source_name;
+
     /** The name of the emitted Zynq C source file. Empty if no C source file
      * output is desired. */
     std::string zynq_c_source_name;
@@ -103,6 +107,14 @@ struct Outputs {
     Outputs c_source(const std::string &c_source_name) const {
         Outputs updated = *this;
         updated.c_source_name = c_source_name;
+        return updated;
+    }
+
+    /** Make a new Outputs struct that emits everything this one does
+     * and also a FIRRTL source file with the given name. */
+    Outputs firrtl_source(const std::string &firrtl_source_name) const {
+        Outputs updated = *this;
+        updated.firrtl_source_name = firrtl_source_name;
         return updated;
     }
 

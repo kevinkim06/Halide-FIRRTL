@@ -90,7 +90,7 @@ CodeGen_Zynq_C::CodeGen_Zynq_C(ostream &dest,
     stream  << zynq_runtime;
 }
 
-// Flow name coversion rule of HLS CodeGen for compatibility.
+// Follow name coversion rule of HLS CodeGen for compatibility.
 string CodeGen_Zynq_C::print_name(const string &name) {
     ostringstream oss;
 

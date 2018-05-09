@@ -89,6 +89,9 @@ struct Target {
         TraceLoads = halide_target_feature_trace_loads,
         TraceStores = halide_target_feature_trace_stores,
         TraceRealizations = halide_target_feature_trace_realizations,
+        NoPerfectNestedLoop = halide_target_feature_no_perfect_nested_loop,
+        //----- Dump IO for RTL Simulation -----//
+        DumpIO = halide_target_feature_dump_io,
         FeatureEnd = halide_target_feature_end
     };
     Target() : os(OSUnknown), arch(ArchUnknown), bits(0) {}

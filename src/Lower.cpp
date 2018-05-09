@@ -334,9 +334,11 @@ Module lower(const vector<Function> &output_funcs, const string &pipeline_name, 
 
     {
         // HLS backend
-        debug(1) << "Perfecting nested loops for better inner loop pipelining...\n";
-        s = perfect_nested_loops(s);
-        debug(2) << "Lowering after perfecting nested loops:\n" << s << "\n\n";
+        if (!t.has_feature(Target::NoPerfectNestedLoop)) {
+            debug(1) << "Perfecting nested loops for better inner loop pipelining...\n";
+            s = perfect_nested_loops(s);
+            debug(2) << "Lowering after perfecting nested loops:\n" << s << "\n\n";
+        }
     }
 
     s = remove_dead_allocations(s);

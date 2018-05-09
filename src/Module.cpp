@@ -5,6 +5,7 @@
 #include <future>
 
 #include "CodeGen_C.h"
+#include "CodeGen_FIRRTL_Testbench.h"
 #include "CodeGen_HLS_Testbench.h"
 #include "CodeGen_Internal.h"
 #include "CodeGen_Zynq_C.h"
@@ -388,6 +389,15 @@ void Module::compile(const Outputs &output_files) const {
         cg->compile(*this);
         delete cg;
         //----- HLS Modification Ends -------//
+    }
+    if (!output_files.firrtl_source_name.empty()) {
+        debug(1) << "Module.compile(): firrtl_source_name " << output_files.firrtl_source_name << "\n";
+        std::ofstream file(output_files.firrtl_source_name);
+        std::string ip_name = "hls_target"; // TODO user-given DUT name
+        std::ofstream firrtl_file(ip_name+".fir");
+        // TODO: Testbench is independent. No C/Verilog co-simulation yet.
+        CodeGen_FIRRTL_Testbench cg(file, target(), firrtl_file, ip_name);
+        cg.compile(*this);
     }
     if (!output_files.stmt_name.empty()) {
         debug(1) << "Module.compile(): stmt_name " << output_files.stmt_name << "\n";
